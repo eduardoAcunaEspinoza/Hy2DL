@@ -1,0 +1,14 @@
+# file extensions
+**/*.pyc
+**/*.h5
+**/*.p
+!test/test_data/*.p
+*.swp
+.coverage
+
+# Project Folders
+docs/build/*
+results/*
+
+
+
