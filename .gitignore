@@ -10,5 +10,6 @@
 docs/build/*
 results/*
 
-
-
+# Build files
+*.egg-info
+dist
