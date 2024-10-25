@@ -10,7 +10,7 @@ CAMELS_DE/
   ...
   CAMELS_DE_xxx_attributes.csv
 ```
-#### CAMELS_GB:
+### CAMELS_GB:
 To use CAMELS_GB can be downloaded from https://doi.org/10.5285/8344e4f3-d2ea-44f5-8afa-86d2987543a9. To add this dataset to the library, the following folder structure should be used:
 
 ```
@@ -21,7 +21,7 @@ CAMELS_GB/
   ...
   CAMELS_GB_xxx_attributes.csv
 ```
-#####  CAMELS_US:
+###  CAMELS_US:
 To use CAMELS_US can be downloaded from https://gdex.ucar.edu/dataset/camels.html. To add this dataset to the library, the following folder structure should be used:
 
 ```
@@ -36,7 +36,7 @@ CAMELS_US/
     camels_xxx.txt 
   usgs_streamflow/
 ```
-#####  CAMELS_US hourly resolution:
+###  CAMELS_US hourly resolution:
 Hourly products from the CAMELS_US dataset can be downloaded from https://doi.org/10.5281/zenodo.4072701. To add this dataset to the library, an additional folder (hourly/) should be created inside the CAMELS_US structure. 
 ```
 CAMELS_US/
