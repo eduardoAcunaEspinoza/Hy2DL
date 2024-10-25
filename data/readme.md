@@ -1,4 +1,4 @@
-The folder structure requiered to use the different datasets is equivalent to the one used in Neural Hydrology. In the following, we present a quick scheme of such structure.
+The folder structure required to use the different datasets is equivalent to the one used in Neural Hydrology. In the following, we present a quick scheme of such structure.
 
 ##### CAMELS_DE:
 The CAMELS_DE dataset can be downloaded from https://doi.org/10.5281/zenodo.13837553. To add this dataset to the library, the following folder structure should be used:
