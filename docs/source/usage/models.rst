@@ -32,7 +32,7 @@ There is also the option to include an extra routing method (after the conceptua
 An example using this model can be found in the notebook folder, in the github repository.
 
 
-MF-LSTM: Multiple-Frequency LSTM
+MF-LSTM: Multi-frequency LSTM
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 :py:class:`hy2dl.modelzoo.mflstm.MFLSTM` uses a single-cell lstm to process data at multiple temporal resolutions (e.g. hourly and daily).
 

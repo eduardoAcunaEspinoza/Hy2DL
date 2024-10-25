@@ -5,7 +5,7 @@ import torch.nn as nn
 
 
 class MFLSTM(nn.Module):
-    """Multiple Frequency LSTM network.
+    """Multi-frequency LSTM network.
 
     Parameters
     ----------
