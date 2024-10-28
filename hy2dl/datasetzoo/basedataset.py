@@ -367,6 +367,10 @@ class BaseDataset(Dataset):
             x_d_std[i] = torch.tensor(np.nanstd(global_x, axis=0))
             del global_x
 
+        # Check if the std is zero, and raise an error if True.
+        if (x_d_std == 0).any():
+            raise RuntimeError("The standard deviation of an input series is zero, which will result in NaN's during normalization.")
+        
         self.scaler["x_d_mean"] = x_d_mean
         self.scaler["x_d_std"] = x_d_std
 
