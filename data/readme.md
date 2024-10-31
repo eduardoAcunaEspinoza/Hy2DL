@@ -44,3 +44,36 @@ CAMELS_US/
     nldas_hourly/
     usgs-streamflow/
 ```
+### CARAVAN:
+To use CARAVAN,the original dataset can be downloaded from https://doi.org/10.5281/zenodo.10968468. Support is only provided to the csv files from the Caravan datset. To add this dataset to the library, the following folder structure should be used:
+
+```
+Caravan/
+  attributes/
+    camels/
+    camelsaus/
+    camelsbr/
+    camelscl/
+    camelsgb/
+    hysets/
+    lamah/
+  code/
+  licenses/
+  shapefiles/
+    camels/
+    camelsaus/
+    camelsbr/
+    camelscl/
+    camelsgb/
+    hysets/
+    lamah/
+  timeseries/
+    camels/
+    camelsaus/
+    camelsbr/
+    camelscl/
+    camelsgb/
+    hysets/
+    lamah/
+```
+For using with the community extensions https://github.com/kratzert/Caravan/discussions/10  from Caravan, the required extension dataset should be manually downloaded and then the corresponding folder added to the original file structure. 
