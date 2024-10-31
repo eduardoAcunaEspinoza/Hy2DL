@@ -76,4 +76,4 @@ Caravan/
     hysets/
     lamah/
 ```
-For using with the community extensions https://github.com/kratzert/Caravan/discussions/10  from Caravan, the required extension dataset should be manually downloaded and then the corresponding folder added to the original file structure. 
+For using with the community extensions https://github.com/kratzert/Caravan/discussions/10  from Caravan, the required extension dataset should be manually downloaded and then the corresponding folders added to the original file structure given above. 
