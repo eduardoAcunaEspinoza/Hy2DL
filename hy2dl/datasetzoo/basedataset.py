@@ -44,6 +44,8 @@ class BaseDataset(Dataset):
         Allows the option to add any arbitrary data that is not included in the standard data sets. Path to a pickle
         file, containing a dictionary with each key corresponding to one basin id  and the value is a date-time indexed
         pandas DataFrame, where the columns are the additional features. Default value is None.
+        For deliberate exclusion of samples, the dictionary's value is a date-time indexed pandas DataFrame with one 
+        single column named "ablation_flag", containing 0/1 flags (0 for exclusion). 
     predict_last_n : Optional[int] = 1
         Number of timesteps (e.g. days, hours) that will be output by the model as predictions. Default value is 1.
     static_input : Optional[List[str]] = None
@@ -153,6 +155,12 @@ class BaseDataset(Dataset):
             # Add additional features (optional)
             if path_additional_features:
                 df_ts = pd.concat([df_ts, self.additional_features[id]], axis=1)
+                if "ablation_flag" in df_ts.columns:
+                    additional_is_flag = ["ablation_flag"]
+                else:
+                    additional_is_flag = []
+            else:
+                additional_is_flag = []
 
             # Defines the start date considering the offset due to sequence length. We want that, if possible, the start
             # date is the first date of prediction.
@@ -164,7 +172,7 @@ class BaseDataset(Dataset):
             ) * pd.tseries.frequencies.to_offset(freq)
 
             # Filter dataframe for the period and variables of interest
-            df_ts = df_ts.loc[warmup_start_date:end_date, unique_input + self.target]
+            df_ts = df_ts.loc[warmup_start_date:end_date, unique_input + self.target + additional_is_flag]
 
             # Reindex the dataframe to assure continuos data between the start and end date of the time period. Missing
             # data will be filled with NaN, so this will be taken care of later by the valid_samples function.
@@ -185,6 +193,7 @@ class BaseDataset(Dataset):
             flag = validate_samples(
                 x=df_ts.loc[:, unique_input].values,
                 y=df_ts.loc[:, self.target].values,
+                ablation_flag = df_ts.loc[:, "ablation_flag"].values if len(additional_is_flag)!=0 else None,
                 attributes=self.df_attributes.loc[id].values if self.static_input else None,
                 seq_length=self.sequence_length,
                 predict_last_n=self.predict_last_n,
@@ -432,6 +441,7 @@ class BaseDataset(Dataset):
 def validate_samples(
     x: np.ndarray,
     y: np.ndarray,
+    ablation_flag:np.ndarray, 
     attributes: np.ndarray,
     seq_length: int,
     predict_last_n: int,
@@ -447,7 +457,9 @@ def validate_samples(
     x : np.ndarray
         array of dynamic input;
     y : np.ndarray
-        arry of target values;
+        array of target values;
+    ablation_flag: np.ndarray
+        1D-array of 0/1 flags for deliberate exclusion of samples (0 for exclusion)
     attributes : np.ndarray
         array containing the static attributes;
     seq_length : int
@@ -504,6 +516,11 @@ def validate_samples(
         # any NaN in the static features makes the sample invalid
         if attributes is not None and check_NaN:
             if np.any(np.isnan(attributes)):
+                flag[i] = 0
+                continue
+                
+        if ablation_flag is not None:
+            if ablation_flag[i] == 0 or np.isnan(ablation_flag[i]):
                 flag[i] = 0
 
     return flag
