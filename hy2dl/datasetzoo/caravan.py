@@ -11,7 +11,7 @@ class CARAVAN(BaseDataset):
     """Class to process data from the Caravan dataset [1]_ .
 
     The class inherits from BaseDataset to execute the operations on how to load and process the data. However here we
-    code the _read_attributes and _read_data methods, that specify how we should read the information from Caravan. 
+    code the _read_attributes and _read_data methods, that specify how we should read the information from Caravan.
     The code would also run with user created datasets which conform to the Caravan style convention.
 
     This class and its methods were adapted from Neural Hydrology [2]_.
@@ -44,6 +44,8 @@ class CARAVAN(BaseDataset):
         Allows the option to add any arbitrary data that is not included in the standard data sets. Path to a pickle
         file, containing a dictionary with each key corresponding to one basin id  and the value is a date-time indexed
         pandas DataFrame, where the columns are the additional features. Default value is None.
+        For deliberate exclusion of samples, the dictionary's value is a date-time indexed pandas DataFrame with one
+        single column named "ablation_flag", containing 0/1 flags (0 for exclusion).
     predict_last_n : Optional[int] = 1
         Number of timesteps (e.g. days, hours) that will be output by the model as predictions. Default value is 1.
     static_input : Optional[List[str]] = None
