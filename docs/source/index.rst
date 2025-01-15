@@ -7,7 +7,7 @@ Welcome to the Hy2DL's documentation
 ====================================
 
 This is the documentation for the Hy2DL Python package.
-The source code is available on `GitHub <https://github.com/KIT-HYD/Hy2DL/>`_.
+The source code is available on `GitHub <https://github.com/eduardoAcunaEspinoza/Hy2DL>`_.
 
 On this documentation page, you'll find a :doc:`guide <usage/models>` of the different models implemented in the library. 
 We have also included a :doc:`guide <usage/config>` with the different arguments that can be used to configure the experiments. 
