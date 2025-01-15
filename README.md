@@ -22,7 +22,17 @@ Detailed documentation for the repository can be found at [Hy2DL.readthedocs.io]
 This code started as part of our study:
 
 ```
-Acuña Espinoza, E., Loritz, R., Álvarez Chaves, M., Bäuerle, N., & Ehret, U. (2023). To bucket or not to bucket? Analyzing the performance and interpretability of hybrid hydrological models with dynamic parameterization. EGUsphere, 2023, 1–22. https://doi.org/10.5194/egusphere-2023-1980
+@Article{hess-28-2705-2024,
+AUTHOR = {Acu\~na Espinoza, E. and Loritz, R. and \'Alvarez Chaves, M. and B\"auerle, N. and Ehret, U.},
+TITLE = {To bucket or not to bucket? Analyzing the performance and interpretability of hybrid hydrological models with dynamic parameterization},
+JOURNAL = {Hydrology and Earth System Sciences},
+VOLUME = {28},
+YEAR = {2024},
+NUMBER = {12},
+PAGES = {2705--2719},
+URL = {https://hess.copernicus.org/articles/28/2705/2024/},
+DOI = {10.5194/hess-28-2705-2024}
+}
 ```
 
 ## Original authors:
