@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 import torch
+import warnings
 from numba import njit, prange
 from torch.utils.data import Dataset
 
@@ -44,8 +45,8 @@ class BaseDataset(Dataset):
         Allows the option to add any arbitrary data that is not included in the standard data sets. Path to a pickle
         file, containing a dictionary with each key corresponding to one basin id  and the value is a date-time indexed
         pandas DataFrame, where the columns are the additional features. Default value is None.
-        For deliberate exclusion of samples, the dictionary's value is a date-time indexed pandas DataFrame with one 
-        single column named "ablation_flag", containing 0/1 flags (0 for exclusion). 
+        For deliberate exclusion of samples, the dictionary's value is a date-time indexed pandas DataFrame with one
+        single column named "ablation_flag", containing 0/1 flags (0 for exclusion).
     predict_last_n : Optional[int] = 1
         Number of timesteps (e.g. days, hours) that will be output by the model as predictions. Default value is 1.
     static_input : Optional[List[str]] = None
@@ -193,7 +194,7 @@ class BaseDataset(Dataset):
             flag = validate_samples(
                 x=df_ts.loc[:, unique_input].values,
                 y=df_ts.loc[:, self.target].values,
-                ablation_flag = df_ts.loc[:, "ablation_flag"].values if len(additional_is_flag)!=0 else None,
+                ablation_flag=df_ts.loc[:, "ablation_flag"].values if len(additional_is_flag) != 0 else None,
                 attributes=self.df_attributes.loc[id].values if self.static_input else None,
                 seq_length=self.sequence_length,
                 predict_last_n=self.predict_last_n,
@@ -346,8 +347,8 @@ class BaseDataset(Dataset):
 
         References
         ----------
-        .. [#] Kratzert, F., Klotz, D., Shalev, G., Klambauer, G., Hochreiter, S., and Nearing, G.: "Towards learning 
-            universal, regional, and local hydrological behaviors via machine learning applied to large-sample datasets" 
+        .. [#] Kratzert, F., Klotz, D., Shalev, G., Klambauer, G., Hochreiter, S., and Nearing, G.: "Towards learning
+            universal, regional, and local hydrological behaviors via machine learning applied to large-sample datasets"
             Hydrology and Earth System Sciences*, 2019, 23, 5089-5110, doi:10.5194/hess-23-5089-2019
 
         """
@@ -376,10 +377,19 @@ class BaseDataset(Dataset):
             x_d_std[i] = torch.tensor(np.nanstd(global_x, axis=0))
             del global_x
 
-        # Check if the std is zero, and raise an error if True.
-        if (x_d_std == 0).any():
-            raise RuntimeError("The standard deviation of an input series is zero, which will result in NaN's during normalization.")
-        
+        # Check if the std is (almost) zero and adjust. The 1e-5 is a threshold to consider a std as zero (due to
+        # numerical issues).
+        zero_std_indices = (x_d_std <= 1e-5).nonzero(as_tuple=True)[0]
+        if len(zero_std_indices) > 0:
+            zero_std_vars = [self.unique_dynamic_input[idx] for idx in zero_std_indices.tolist()]
+            warnings.warn(
+                f"The standard deviation of the following variable(s) is zero: {zero_std_vars}. "
+                f"The std of this variable(s) has been forced to 1 to avoid NaN issues during normalization.",
+                stacklevel=2,
+            )
+        x_d_std[zero_std_indices] = 1.0
+
+        # Save scaler of dynamic variables
         self.scaler["x_d_mean"] = x_d_mean
         self.scaler["x_d_std"] = x_d_std
 
@@ -395,8 +405,17 @@ class BaseDataset(Dataset):
             # Calculate std
             x_s_std = torch.tensor(self.df_attributes.std().values, dtype=torch.float32)
             # Values can be NaN if we only have one basin, or can be 0 if the value for a specific attribute is the
-            # same in all catchments. In this case we replace it by 1, so it does not affect the standardization.
-            x_s_std = torch.where(torch.isnan(x_s_std) | (x_s_std == 0), torch.tensor(1.0), x_s_std)
+            # same in all catchments. In this case we replace it by 1, so it does not affect the standardization. The
+            # 1e-5 is a threshold to consider a std as zero (due to numerical issues).
+            nan_or_zero_std_indices = (torch.isnan(x_s_std) | (x_s_std <= 1e-5)).nonzero(as_tuple=True)[0]
+            if len(nan_or_zero_std_indices) > 0:
+                nan_or_zero_std_vars = [self.df_attributes.columns[idx] for idx in nan_or_zero_std_indices.tolist()]
+                warnings.warn(
+                    f"The standard deviation of the following attribute(s) is NaN or zero: {nan_or_zero_std_vars}. "
+                    f"The std of this attribute(s) has been forced to 1 to avoid NaN issues during normalization.",
+                    stacklevel=2,
+                )
+            x_s_std[nan_or_zero_std_indices] = 1.0
             self.scaler["x_s_std"] = x_s_std
 
         if path_save_scaler:  # save the results in a pickle file
@@ -437,11 +456,11 @@ class BaseDataset(Dataset):
         return batch
 
 
-@njit()
+# @njit()
 def validate_samples(
     x: np.ndarray,
     y: np.ndarray,
-    ablation_flag:np.ndarray, 
+    ablation_flag: np.ndarray,
     attributes: np.ndarray,
     seq_length: int,
     predict_last_n: int,
@@ -518,7 +537,7 @@ def validate_samples(
             if np.any(np.isnan(attributes)):
                 flag[i] = 0
                 continue
-                
+
         if ablation_flag is not None:
             if ablation_flag[i] == 0 or np.isnan(ablation_flag[i]):
                 flag[i] = 0
