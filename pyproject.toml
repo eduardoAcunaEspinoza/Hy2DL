@@ -8,7 +8,7 @@ authors = [
     {name = "Ralf Loritz", email = "ralf.loritz@kit.edu"},
     {name = "Manuel Álvarez Chaves", email = "manuel.alvarez-chaves@simtech.uni-stuttgart.de"}
 ]
-license = {text = "GPL-3"}
+license = {text = "MIT"}
 requires-python = ">=3.9"
 
 dependencies = [
