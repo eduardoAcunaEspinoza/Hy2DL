@@ -172,8 +172,11 @@ class BaseDataset(Dataset):
                 self.sequence_length - self.predict_last_n
             ) * pd.tseries.frequencies.to_offset(freq)
 
-            # Filter dataframe for the period and variables of interest
-            df_ts = df_ts.loc[warmup_start_date:end_date, unique_input + self.target + additional_is_flag]
+            # Filter dataframe for the period and variables of interest. In case we are doing forecasting, and the
+            # target is also used as input in the hindcast period, then we remove the duplicate columns.
+            df_ts = df_ts.loc[
+                warmup_start_date:end_date, list(dict.fromkeys(unique_input + self.target + additional_is_flag))
+            ]
 
             # Reindex the dataframe to assure continuos data between the start and end date of the time period. Missing
             # data will be filled with NaN, so this will be taken care of later by the valid_samples function.
