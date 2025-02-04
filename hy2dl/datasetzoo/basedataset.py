@@ -459,7 +459,7 @@ class BaseDataset(Dataset):
         return batch
 
 
-# @njit()
+@njit()
 def validate_samples(
     x: np.ndarray,
     y: np.ndarray,
