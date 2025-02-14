@@ -103,8 +103,8 @@ class Optimizer:
         """
         # clip gradients to mitigate exploding gradients issues
         try:
-            torch.nn.utils.clip_grad_norm_(parameters=self.model.parameters(), max_norm=1, error_if_nonfinite=True)
-        except Exception as e:
+            torch.nn.utils.clip_grad_norm_(parameters=self.optimizer.param_groups[0]["params"], max_norm=1, error_if_nonfinite=True)
+        except RuntimeError as e:
             # if the gradients still explode after norm_clipping, we skip the optimization step
             print(f"Batch {batch} in Epoch {epoch} was skipped during optimization due to gradient instability.")
             print(f"Error: {e}")
