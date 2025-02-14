@@ -95,6 +95,25 @@ class Optimizer:
             for param_group in self.optimizer.param_groups:
                 param_group["lr"] = self._find_learning_rate(epoch=epoch)
 
+    def clip_grad_and_step(self, epoch: int, batch: int) -> None:
+        """Perform the optimizer step.  
+        This involves clipping the gradients with a maximum norm of 1 and updating the 
+        otimizer weights.
+
+        """
+        # clip gradients to mitigate exploding gradients issues
+        try:
+            torch.nn.utils.clip_grad_norm_(parameters=self.model.parameters(), max_norm=1, error_if_nonfinite=True)
+        except Exception as e:
+            # if the gradients still explode after norm_clipping, we skip the optimization step
+            print(f"Batch {batch} in Epoch {epoch} was skipped during optimization due to gradient instability.")
+            print(f"Error: {e}")
+            return
+        
+        # update the optimizer weights
+        self.optimizer.step()
+
+        return
 
 def create_folder(folder_path: str):
     """Create a folder to store the results.
