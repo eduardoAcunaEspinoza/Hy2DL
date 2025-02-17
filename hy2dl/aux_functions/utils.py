@@ -96,10 +96,18 @@ class Optimizer:
                 param_group["lr"] = self._find_learning_rate(epoch=epoch)
 
     def clip_grad_and_step(self, epoch: int, batch: int) -> None:
-        """Perform the optimizer step.  
-        This involves clipping the gradients with a maximum norm of 1 and updating the 
-        otimizer weights.
+        """Perform an optimizer step.
 
+        Before performing a step with the optimizer, tries to clip the
+        gradients with a maximum norm of 1.
+
+        Parameters
+        ----------
+        epoch : int
+            Current epoch
+        batch : int
+            Batch ID of the current batch
+        
         """
         # clip gradients to mitigate exploding gradients issues
         try:
