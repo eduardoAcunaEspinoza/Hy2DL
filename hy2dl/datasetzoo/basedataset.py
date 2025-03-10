@@ -138,12 +138,14 @@ class BaseDataset(Dataset):
 
         # Remove duplicates in case we use the same variable in different frequencies (e.g. daily and hourly)
         self.unique_dynamic_input = self._unique_dynamic_input()
-        # If we are using multiple frequencies, and for each frequency different input variables, we need the index
-        # of those variables, in self.unique_dynamic_input, to construct the batches.
+        # If we are using multiple frequencies, and for each frequency different input variables, we store the index
+        # of those variables.
         if self.custom_freq_processing and isinstance(self.dynamic_input, dict):
             self.dynamic_input_index = {}
             for key, variables in self.dynamic_input.items():
                 self.dynamic_input_index[key] = [self.unique_dynamic_input.index(elem) for elem in variables]
+        else:
+            self.dynamic_input_index = None
 
         # In case we are using a hybrid model, we also include the unique variables from conceptual model.
         unique_input = list(dict.fromkeys(self.unique_dynamic_input + self.conceptual_input))
@@ -193,6 +195,18 @@ class BaseDataset(Dataset):
             else:
                 self.block_id = np.arange(len(df_ts))
 
+            # Prepare information to be sent to the valid_samples function, which uses @njit to speed up the process,
+            # but does not accept dictionaries as input.
+            if self.custom_freq_processing and self.dynamic_input_index:
+                freq_info = np.zeros((len(self.custom_freq_processing), 2), dtype=np.int32)
+                dynamic_input_index = []
+                for i, (key, values) in enumerate(self.custom_freq_processing.items()):
+                    freq_info[i] = [values["n_steps"], values["freq_factor"]]
+                    dynamic_input_index.append(np.array(self.dynamic_input_index[key], dtype=np.int32))
+            else:
+                freq_info = None
+                dynamic_input_index = None
+
             # Checks for invalid samples due to NaN or insufficient sequence length
             flag = validate_samples(
                 x=df_ts.loc[:, unique_input].values,
@@ -202,6 +216,8 @@ class BaseDataset(Dataset):
                 seq_length=self.sequence_length,
                 predict_last_n=self.predict_last_n,
                 block_id=self.block_id,
+                freq_info=freq_info,
+                dynamic_input_index=dynamic_input_index,
                 check_NaN=check_NaN,
             )
             # Create a list that contain the indexes (basin, time_index) of the valid samples
@@ -459,7 +475,7 @@ class BaseDataset(Dataset):
         return batch
 
 
-@njit()
+# @njit()
 def validate_samples(
     x: np.ndarray,
     y: np.ndarray,
@@ -468,6 +484,8 @@ def validate_samples(
     seq_length: int,
     predict_last_n: int,
     block_id: np.ndarray,
+    freq_info: np.ndarray,
+    dynamic_input_index: List[np.ndarray],
     check_NaN: bool,
 ) -> np.ndarray:
     """Checks for invalid samples due to NaN or insufficient sequence length.
@@ -490,6 +508,10 @@ def validate_samples(
         Number of values that want to be used to calculate the loss
     block_id : np.ndarray
         Array with the indexes of the block-samples that will be checked.
+    freq_info : np.ndarray
+        Array with the number of timesteps and frequency factor for each frequency
+    dynamic_input_index : List[np.ndarray]
+        List with the indexes of the dynamic input variables for each frequency
     check_NaN : bool
         Boolean to specify if Nan should be checked or not
 
@@ -512,7 +534,7 @@ def validate_samples(
     # Initialize vector to store the flag. 1 means valid sample for training
     flag = np.ones(n_samples)
 
-    for i in prange(n_samples):  # iterate through all samples
+    for i in range(n_samples):  # iterate through all samples
         # id of the block we are considering
         block_index = block_id[i]
 
@@ -521,15 +543,32 @@ def validate_samples(
             flag[i] = 0
             continue
 
+        # Check inputs
         if check_NaN:
-            # any NaN in the dynamic inputs makes the sample invalid
-            x_sample = x[block_index - seq_length + 1 : block_index + 1, :]
-            if np.any(np.isnan(x_sample)):
-                flag[i] = 0
-                continue
+            # if we are using multiple temporal frequencies and different variables for each frequency
+            if freq_info is not None and dynamic_input_index is not None:
+                aux_index = 0
+                for j in range(freq_info.shape[0]):
+                    # Sample only the variables and timesteps of interest for the given frequency
+                    i_start = block_index - seq_length + 1 + aux_index
+                    x_sample = x[i_start : i_start + freq_info[j, 0] * freq_info[j, 1], dynamic_input_index[j]]
+                    aux_index += freq_info[j, 0] * freq_info[j, 1]
 
+                    if np.any(np.isnan(x_sample)):
+                        flag[i] = 0
+                        break  # if one frequency is invalid, we do not need to check the others
+
+                if flag[i] == 0:  # if the input is invalid, we do not need to check other conditions
+                    continue
+
+            else:  # if we have only one temporal frequency or the same variables for all frequencies
+                x_sample = x[block_index - seq_length + 1 : block_index + 1, :]
+                if np.any(np.isnan(x_sample)):
+                    flag[i] = 0
+                    continue
+
+        # all-NaN in the targets makes the sample invalid
         if check_NaN:
-            # all-NaN in the targets makes the sample invalid
             y_sample = y[block_index - predict_last_n + 1 : block_index + 1]
             if np.all(np.isnan(y_sample)):
                 flag[i] = 0
