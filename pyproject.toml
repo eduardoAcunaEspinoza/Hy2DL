@@ -17,6 +17,7 @@ dependencies = [
     "numba>=0.58.1",
     "numpy>=1.26.3",
     "pandas>2.2.0",
+    "pyyaml>=6.0.2",
     "torch>=2.2.1",
 ]
 

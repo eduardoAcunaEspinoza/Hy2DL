@@ -1,73 +1,63 @@
-from typing import Dict, Union
-
 import torch
 import torch.nn as nn
 
+from hy2dl.modelzoo.inputlayer import InputLayer
+from hy2dl.utils.config import Config
+
 
 class CudaLSTM(nn.Module):
-    """LSTM network.
+    """LSTM model class, which relies on PyTorch's CUDA LSTM class.
 
     Parameters
     ----------
-    model_configuration : Dict[str, Union[int, float, str, dict]]
-        Configuration of the model
+    cfg : Config
+        Configuration file.
 
     """
 
-    def __init__(self, model_configuration: Dict[str, Union[int, float, str, dict]]):
+    def __init__(self, cfg: Config):
         super().__init__()
-        self.input_size_lstm = model_configuration["input_size_lstm"]
-        self.hidden_size = model_configuration["hidden_size"]
-        self.num_layers = model_configuration["no_of_layers"]
-        self.predict_last_n = model_configuration["predict_last_n"]
 
-        self.lstm = nn.LSTM(
-            input_size=self.input_size_lstm, hidden_size=self.hidden_size, batch_first=True, num_layers=self.num_layers
-        )
+        self.embedding_net = InputLayer(cfg)
 
-        self.dropout = torch.nn.Dropout(model_configuration["dropout_rate"])
-        self.linear = nn.Linear(in_features=self.hidden_size, out_features=model_configuration.get("out_features", 1))
+        self.lstm = nn.LSTM(input_size=self.embedding_net.output_size, hidden_size=cfg.hidden_size, batch_first=True)
 
-    def forward(self, sample: Dict[str, torch.Tensor]):
+        self.dropout = torch.nn.Dropout(p=cfg.dropout_rate)
+
+        self.linear = nn.Linear(in_features=cfg.hidden_size, out_features=cfg.output_features)
+
+        self.predict_last_n = cfg.predict_last_n
+
+        self._reset_parameters(cfg=cfg)
+
+    def _reset_parameters(self, cfg: Config):
+        """Special initialization of certain model weights."""
+        if cfg.initial_forget_bias is not None:
+            self.lstm.bias_hh_l0.data[cfg.hidden_size : 2 * cfg.hidden_size] = cfg.initial_forget_bias
+
+    def forward(self, sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]):
         """Forward pass of lstm network
 
         Parameters
         ----------
-        sample: Dict[str, torch.Tensor]
-            Dictionary with the different tensors that will be used for the forward pass.
+        sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]
+            Dictionary with the different tensors / dictionaries that will be used for the forward pass.
 
         Returns
         -------
         pred: Dict[str, torch.Tensor]
 
         """
-        # Dynamic input
-        x_lstm = sample["x_d"]
-
-        # Concatenate static
-        if sample.get("x_s") is not None:
-            x_lstm = torch.cat((x_lstm, sample["x_s"].unsqueeze(1).repeat(1, x_lstm.shape[1], 1)), dim=2)
-
-        h0 = torch.zeros(
-            self.num_layers,
-            x_lstm.shape[0],
-            self.hidden_size,
-            requires_grad=True,
-            dtype=torch.float32,
-            device=x_lstm.device,
-        )
-        c0 = torch.zeros(
-            self.num_layers,
-            x_lstm.shape[0],
-            self.hidden_size,
-            requires_grad=True,
-            dtype=torch.float32,
-            device=x_lstm.device,
-        )
-
-        out, (hn_1, cn_1) = self.lstm(x_lstm, (h0, c0))
+        # Preprocess data to be sent to the LSTM
+        processed_sample = self.embedding_net(sample)
+        x_lstm = self.embedding_net.assemble_sample(processed_sample)
+        
+        # Forward pass through the LSTM
+        out, _ = self.lstm(x_lstm)
+        # Extract sequence of interest
         out = out[:, -self.predict_last_n :, :]
         out = self.dropout(out)
+        # Transform the output to the desired shape using a linear layer
         out = self.linear(out)
 
         return {"y_hat": out}
