@@ -1,11 +1,12 @@
 import os
 import random
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import numpy as np
 import torch
 import yaml
+from hy2dl.utils.logging import get_logger
 
 
 class Config(object):
@@ -24,7 +25,7 @@ class Config(object):
         research in hydrology. Journal of Open Source Software, 7, 4050, doi: 10.21105/joss.04050, 2022
     """
 
-    def __init__(self, yml_path_or_dict: Dict):
+    def __init__(self, yml_path_or_dict: dict):
         # read the config from a dictionary
         self._cfg = self._read_yaml(yml_path_or_dict)
 
@@ -43,6 +44,9 @@ class Config(object):
 
         # Create folder to save the results
         self._create_folder()
+
+        # Initialize logger
+        self.logger = get_logger(self.path_save_folder)
 
     def dump(self) -> None:
         """Write the current configuration to a YAML file."""
@@ -65,13 +69,21 @@ class Config(object):
 
         if self.static_input is None and self.static_embedding is not None:
             raise ValueError("`static_embedding` requires specification of `static_input`")
-        
+
         if isinstance(self.dynamic_input, dict) and isinstance(self.custom_seq_processing, dict):
-                if set(self.dynamic_input.keys()) != set(self.custom_seq_processing.keys()):
-                    raise ValueError("The dictionaries `dynamic_input` and `custom_seq_processing` must have the same keys.")
-                
-        if self.forecast_input and self.dynamic_embedding is None and len(self.forecast_input) != len(self.dynamic_input) :
-            raise ValueError("`dynamic_input` and `forecast_input` have different dimensions. This is supported only if `dynamic_embedding` is specified")
+            if set(self.dynamic_input.keys()) != set(self.custom_seq_processing.keys()):
+                raise ValueError(
+                    "The dictionaries `dynamic_input` and `custom_seq_processing` must have the same keys."
+                )
+
+        if (
+            self.forecast_input
+            and self.dynamic_embedding is None
+            and len(self.forecast_input) != len(self.dynamic_input)
+        ):
+            raise ValueError(
+                "`dynamic_input` and `forecast_input` have different dimensions. This is supported only if `dynamic_embedding` is specified"
+            )
 
     def _check_num_workers(self):
         """Checks if the number of workers that will be used in the dataloaders is valid."""
@@ -80,7 +92,7 @@ class Config(object):
             raise ValueError(f"num_workers must be non-negative, got {num_workers}.")
         elif num_workers > 0 and os.cpu_count() < num_workers:
             raise RuntimeError(f"num_workers ({num_workers}) must be less than number of cores ({os.cpu_count}).")
-    
+
     def _check_seq_length(self):
         """Checks the consistency of sequence length when custom_seq_processing is used."""
         if self.custom_seq_processing:
@@ -152,22 +164,21 @@ class Config(object):
                 raise RuntimeError("CUDA requested but no CUDA devices available.")
 
             return "cuda:0"  # Default to the first CUDA device
-        
+
         elif device.lower().startswith("cuda"):
             if not torch.cuda.is_available():
                 raise RuntimeError("CUDA requested but no CUDA devices available.")
 
-            if device.lower().startswith("cuda"):
-                try:
-                    device_index = int(device.lower().split(":")[1])
-                except (IndexError, ValueError):
-                    raise ValueError(f"Invalid device format: '{device}'. Expected format 'cuda:<index>'.") from None
+            try:
+                device_index = int(device.lower().split(":")[1])
+            except (IndexError, ValueError):
+                raise ValueError(f"Invalid device format: '{device}'. Expected format 'cuda:<index>'.") from None
 
-                if device_index >= torch.cuda.device_count():
-                    raise ValueError(
-                        f"CUDA device index {device_index} is out of range. "
-                        f"Only {torch.cuda.device_count()} CUDA device(s) available."
-                    )
+            if device_index >= torch.cuda.device_count():
+                raise ValueError(
+                    f"CUDA device index {device_index} is out of range. "
+                    f"Only {torch.cuda.device_count()} CUDA device(s) available."
+                )
 
             return device.lower()
 
@@ -177,7 +188,7 @@ class Config(object):
                 f"'cuda[:<index>]'. CPU will be used by default."
             )
             return "cpu"
-    
+
     @staticmethod
     def _get_embedding_spec(embedding: dict) -> dict:
         """Extracts the embedding specification from the configuration."""
@@ -201,8 +212,8 @@ class Config(object):
         return self._cfg.get("batch_size_evaluation", self.batch_size_training)
 
     @property
-    def conceptual_input(self) -> List[str]:
-        return Config._as_default_list(self._cfg.get("conceptual_input"))
+    def conceptual_model(self) -> str:
+        return self._cfg.get("conceptual_model")
 
     @property
     def custom_seq_processing(self) -> Optional[dict[str, dict[str, int]]]:
@@ -229,7 +240,15 @@ class Config(object):
         return self._cfg.get("dynamic_input")
 
     @property
-    def dynamic_embedding(self) -> Optional[Dict[str, Union[str, float, List[int]]]]:
+    def dynamic_input_conceptual_model(self) -> dict[str, str | list[str]]:
+        return self._cfg.get("dynamic_input_conceptual_model")
+
+    @property
+    def dynamic_parameterization_conceptual_model(self) -> List[str]:
+        return Config._as_default_list(self._cfg.get("dynamic_parameterization_conceptual_model"))
+
+    @property
+    def dynamic_embedding(self) -> Optional[dict[str, Union[str, float, List[int]]]]:
         embedding = self._cfg.get("dynamic_embedding")
         return None if embedding is None else Config._get_embedding_spec(embedding)
 
@@ -272,15 +291,19 @@ class Config(object):
     @property
     def nan_sequence_probability(self) -> float:
         return self._cfg.get("nan_sequence_probability", None)
-    
+
     @property
     def nan_step_probability(self) -> float:
         return self._cfg.get("nan_step_probability", None)
 
     @property
+    def num_conceptual_models(self) -> int:
+        return self._cfg.get("num_conceptual_models", 1)
+
+    @property
     def num_workers(self) -> int:
         return self._cfg.get("num_workers", 0)
-    
+
     @property
     def path_data(self) -> Path:
         if self._cfg.get("path_data"):
@@ -322,6 +345,10 @@ class Config(object):
     def predict_last_n(self) -> int:
         return self._cfg.get("predict_last_n", 1)
 
+    @predict_last_n.setter
+    def predict_last_n(self, value: int):
+        self._cfg["predict_last_n"] = value
+
     @property
     def optimizer(self) -> str:
         return self._cfg.get("optimizer", "adam")
@@ -335,7 +362,11 @@ class Config(object):
         return self._cfg.get("random_seed", int(np.random.uniform(0, 1e6)))
 
     @property
-    def static_embedding(self) -> Optional[Dict[str, Union[str, float, List[int]]]]:
+    def routing_model(self) -> str:
+        return self._cfg.get("routing_model", None)
+
+    @property
+    def static_embedding(self) -> Optional[dict[str, Union[str, float, List[int]]]]:
         embedding = self._cfg.get("static_embedding")
         return None if embedding is None else Config._get_embedding_spec(embedding)
 
@@ -346,6 +377,10 @@ class Config(object):
     @property
     def seq_length(self) -> int:
         return self._cfg.get("seq_length")
+
+    @seq_length.setter
+    def seq_length(self, value: int):
+        self._cfg["seq_length"] = value
 
     @property
     def seq_length_hindcast(self) -> int:
@@ -370,7 +405,7 @@ class Config(object):
     @property
     def teacher_forcing_scheduler(self) -> dict[str, float]:
         return self._cfg.get("teacher_forcing_scheduler", None)
-    
+
     @property
     def testing_period(self) -> List[str]:
         return self._cfg.get("testing_period")

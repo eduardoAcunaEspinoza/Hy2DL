@@ -1,12 +1,13 @@
 import pickle
 import warnings
-from typing import Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
 import torch
-from numba import njit, prange
+from numpy.lib.stride_tricks import sliding_window_view
 from torch.utils.data import Dataset
+from tqdm import tqdm
 
 from hy2dl.utils.config import Config
 
@@ -79,8 +80,8 @@ class BaseDataset(Dataset):
             self.x_fc = {}
         if self.cfg.static_input:
             self.x_s = {}  # static input (e.g. catchment attributes)
-        if self.cfg.conceptual_input:
-            self.x_conceptual = {}  # conceptual input (case of hybrid models)
+        if self.cfg.dynamic_input_conceptual_model:
+            self.x_d_conceptual = {}  # conceptual input (case of hybrid models)
         if self.cfg.autoregressive_input:
             self.x_ar = {}  # autoregressive input
 
@@ -91,6 +92,7 @@ class BaseDataset(Dataset):
 
         # List to store the valid entities (basin, time_index) that will be used for training.
         self.valid_entities = []
+        basins_without_samples = []
 
         # --------------------------------------------------------------------------
         # Process static attributes
@@ -104,14 +106,17 @@ class BaseDataset(Dataset):
         # Retrieve unique dynamic input names
         self.unique_dynamic_input = self._unique_dynamic_input()
 
-        # Include other type of inputs
-        model_input = list(
-            dict.fromkeys(self.unique_dynamic_input + self.cfg.forecast_input + self.cfg.conceptual_input)
-        )
+        # Model input for hindcast period (historical period)
+        self.hindcast_input = list(dict.fromkeys(self.unique_dynamic_input + self._unique_conceptual_input()))
 
         # This loop goes one by one through all the entities. For each entity it creates an entry in the different
-        # dictionaries
-        for id in self.entities_ids:
+        # dictionaries. We define a progress bar if self.entitites_ids contains more than one entity.
+        iterator = (
+            tqdm(self.entities_ids, desc="Processing entities", unit="entity", ascii=True)
+            if len(self.entities_ids) > 1
+            else self.entities_ids
+        )
+        for id in iterator:
             # Load time series for specific catchment id
             df_ts = self._read_data(catch_id=id)
 
@@ -136,7 +141,8 @@ class BaseDataset(Dataset):
 
             # Filter dataframe for the period and variables of interest
             df_ts = df_ts.loc[
-                warmup_start_date:end_date, list(dict.fromkeys(model_input + self.cfg.target + additional_flag))
+                warmup_start_date:end_date,
+                list(dict.fromkeys(self.hindcast_input + self.cfg.forecast_input + self.cfg.target + additional_flag)),
             ]
 
             # Reindex the dataframe to assure continuos data between the start and end date of the time period. Missing
@@ -144,50 +150,20 @@ class BaseDataset(Dataset):
             full_range = pd.date_range(start=warmup_start_date, end=end_date, freq=freq)
             df_ts = df_ts.reindex(full_range)
 
-            # If we are working seq-seq and we want non-overlapping blocks we calculate their respective starting
-            # indices.
+            # Checks for invalid samples due to NaN or insufficient sequence length
+            flag = validate_samples(self, df_ts=df_ts, df_attributes=self.df_attributes.loc[id], check_NaN=check_NaN)
+            # Index of valid samples
+            valid_samples = np.where(flag)[0]
+
+            # If we are working seq-seq and we want non-overlapping blocks we calculate their respective starting indices.
             if self.cfg.unique_prediction_blocks:
-                self.samples_id = np.arange(len(df_ts) // self.cfg.predict_last_n) * self.cfg.predict_last_n + (
+                block_id = np.arange(len(df_ts) // self.cfg.predict_last_n) * self.cfg.predict_last_n + (
                     self.cfg.predict_last_n - 1
                 )
-            else:
-                self.samples_id = np.arange(len(df_ts))
+                valid_samples = block_id[flag[block_id]]
 
-            # Prepare information to be sent to the valid_samples function, which uses @njit to speed up the process,
-            # but does not accept dictionaries as input.
-            if isinstance(self.cfg.dynamic_input, list):
-                hindcast_index = [np.array([df_ts.columns.tolist().index(col) for col in self.cfg.dynamic_input])]
-            elif isinstance(self.cfg.dynamic_input, dict):
-                hindcast_index = [np.array([df_ts.columns.tolist().index(col) for col in input_group])
-                                  for input_group in self.cfg.dynamic_input.values()
-                                  ]
-            freq_steps = None
-            if self.cfg.custom_seq_processing:
-                freq_steps = np.array([v['n_steps'] * v['freq_factor'] for v in self.cfg.custom_seq_processing.values()])
-
-            forecast_index = None
-            if self.cfg.forecast_input:
-                # Save index (with respect of columns if dt_ts) of forecast variables
-                forecast_index = np.array([df_ts.columns.tolist().index(col) for col in self.cfg.forecast_input])
-
-            # Checks for invalid samples due to NaN or insufficient sequence length
-            flag = validate_samples(
-                x=df_ts[model_input].values,
-                y=df_ts[self.cfg.target].values,
-                samples_id=self.samples_id,
-                ablation_flag=df_ts["ablation_flag"].values if len(additional_flag) != 0 else None,
-                attributes=self.df_attributes.loc[id].values if self.cfg.static_input else None,
-                seq_length_hindcast=self.cfg.seq_length_hindcast,
-                seq_length_forecast=self.cfg.seq_length_forecast,
-                predict_last_n=self.cfg.predict_last_n,
-                freq_steps=freq_steps,
-                hindcast_index=hindcast_index,
-                forecast_index=forecast_index,
-                check_NaN=check_NaN,
-            )
             # Create a list that contain the indexes (basin, time_index) of the valid samples
-            valid_samples = np.argwhere(flag == 1)
-            self.valid_entities.extend([(id, self.samples_id[int(f[0])]) for f in valid_samples])
+            self.valid_entities.extend([(id, int(f)) for f in valid_samples])
 
             # Store the processed information of the basin, in basin-indexed dictionaries.
             if valid_samples.size > 0:
@@ -218,10 +194,20 @@ class BaseDataset(Dataset):
                     self.x_ar[id] = torch.tensor(df_ts[self.cfg.target].shift(periods=1).values, dtype=torch.float32)
 
                 # Store conceptual input as nested dictionary. First indexed by basin and then by variable name
-                if self.cfg.conceptual_input:
-                    self.x_conceptual[id] = {
-                        col: torch.tensor(df_ts[col].values, dtype=torch.float32) for col in self.conceptual_input
-                    }
+                if self.cfg.dynamic_input_conceptual_model:
+                    self.x_d_conceptual[id] = {}
+                    for k, v in self.cfg.dynamic_input_conceptual_model.items():
+                        col = [v] if isinstance(v, str) else v
+                        self.x_d_conceptual[id][k] = torch.tensor(
+                            df_ts[col].mean(axis=1, skipna=True).values, dtype=torch.float32
+                        )
+
+            else:  # Basins without valid samples
+                basins_without_samples.append(id)
+
+        # Print information of basins without valid samples
+        if len(basins_without_samples) > 0:
+            cfg.logger.info(f"Basins without valid samples in period of interest: {basins_without_samples}")
 
     def __len__(self):
         return len(self.valid_entities)
@@ -230,8 +216,9 @@ class BaseDataset(Dataset):
         """Function used to construct the elements of the batches"""
         basin, i = self.valid_entities[id]
         sample = {}
-
-        # Input in hindcast period ------------------------------------------------------------------------------------
+        # --------------------------
+        # Input in hindcast period
+        # --------------------------
         # If we do not have custom processing (process all the sequence length the same way)
         if self.cfg.custom_seq_processing is None:
             # Dynamic input
@@ -273,8 +260,9 @@ class BaseDataset(Dataset):
 
                 # Update start position for next part of the sequence
                 current_index += subset_info["n_steps"] * subset_info["freq_factor"]
-
-        # Input in forecast period ------------------------------------------------------------------------------------
+        # --------------------------
+        # Input in forecast period
+        # --------------------------
         if self.cfg.forecast_input:
             sample["x_d_fc"] = {k: v[i + 1 : i + 1 + self.cfg.seq_length_forecast] for k, v in self.x_fc[basin].items()}
             # Autoregressive input in forecast period (useful for teacher/forcing learning)
@@ -284,26 +272,31 @@ class BaseDataset(Dataset):
             # Forecast metadata
             sample["date_issue_fc"] = self.df_ts[basin].index[i].to_numpy()
             sample["persistent_q"] = self.y_obs[basin][i, :]  # last available discharge (for metric calculation)
-
-        # Information about the static input ---------------------------------------------------------------------------
+        # --------------------------
+        # Information about the static input
+        # --------------------------
         if self.cfg.static_input:
             sample["x_s"] = self.x_s[basin]
-
-        # Information about target variable ----------------------------------------------------------------------------
+        # --------------------------
+        # Information about target variable
+        # --------------------------
         sample["y_obs"] = self.y_obs[basin][
             i + self.cfg.seq_length_forecast + 1 - self.cfg.predict_last_n : i + self.cfg.seq_length_forecast + 1, :
         ]
-
-        # Information about the conceptual (hybrid model) --------------------------------------------------------------
-        if self.cfg.conceptual_input:
-            sample["x_conceptual"] = {
-                k: v[i - self.cfg.seq_length_hindcast + 1 : i + 1] for k, v in self.x_conceptual[basin].items()
+        # --------------------------
+        # Information about the conceptual (hybrid model)
+        # --------------------------
+        if self.cfg.dynamic_input_conceptual_model:
+            sample["x_d_conceptual"] = {
+                k: v[i - self.cfg.seq_length_hindcast + 1 : i + 1] for k, v in self.x_d_conceptual[basin].items()
             }
 
-        # Standard deviation of the discharge for the specific basin (use in the basin-averaged NSE loss function) -----
+        # --------------------------
+        # Additional data
+        # --------------------------
+        # use in the basin-averaged NSE loss function)
         if self.basin_std:
             sample["std_basin"] = self.basin_std[basin].repeat(sample["y_obs"].size(0)).unsqueeze(1)
-
         # Information about the basin and the dates to which predictions will be made. This facilitates evaluating and
         # ploting the results.
         sample["basin"] = np.array(basin, dtype=np.str_)
@@ -316,12 +309,16 @@ class BaseDataset(Dataset):
         )
 
         # Mask autoregressive input
-        if self.istraining and (self.cfg.nan_step_probability is not None or self.cfg.nan_sequence_probability is not None):
-            sample = self._add_nan_streaks(sample) 
+        if self.istraining and (
+            self.cfg.nan_step_probability is not None or self.cfg.nan_sequence_probability is not None
+        ):
+            sample = self._add_nan_streaks(sample)
 
         return sample
 
-    def _add_nan_streaks(self, sample: dict[str, torch.Tensor | np.ndarray | dict[str, torch.Tensor]]) -> dict[str, torch.Tensor | np.ndarray | dict[str, torch.Tensor]]:
+    def _add_nan_streaks(
+        self, sample: dict[str, torch.Tensor | np.ndarray | dict[str, torch.Tensor]]
+    ) -> dict[str, torch.Tensor | np.ndarray | dict[str, torch.Tensor]]:
         """Add NaN streaks to the sample data.
 
         Parameters
@@ -334,20 +331,20 @@ class BaseDataset(Dataset):
         sample : dict[str, torch.Tensor | np.ndarray | dict[str, torch.Tensor]]
             Sample data with NaN streaks added.
         """
-        
+
         # Probability of masking entire channels
         mask_nan_seq = torch.rand(1).item() < self.cfg.nan_sequence_probability
 
         for k, v in sample.items():
-            if not k.startswith("x_ar"): 
-                continue # skip irrelevant keys 
-            if  mask_nan_seq: # mask whole channel
-                sample[k] = torch.full_like(v, float("nan")) 
-            else: # mask some steps
-                sample[k][torch.rand_like(v) < self.cfg.nan_step_probability] = float('nan') 
+            if not k.startswith("x_ar"):
+                continue  # skip irrelevant keys
+            if mask_nan_seq:  # mask whole channel
+                sample[k] = torch.full_like(v, float("nan"))
+            else:  # mask some steps
+                sample[k][torch.rand_like(v) < self.cfg.nan_step_probability] = float("nan")
 
         return sample
-    
+
     def _read_attributes(self) -> pd.DataFrame:
         # This function is specific for each dataset
         raise NotImplementedError
@@ -356,12 +353,12 @@ class BaseDataset(Dataset):
         # This function is specific for each dataset
         raise NotImplementedError
 
-    def _load_additional_features(self) -> Dict[str, pd.DataFrame]:
+    def _load_additional_features(self) -> dict[str, pd.DataFrame]:
         """Read pickle dictionary containing additional features.
 
         Returns
         -------
-        additional_features : Dict[str, pd.DataFrame]
+        additional_features : dict[str, pd.DataFrame]
             Dictionary where each key is a basin and each value is a date-time indexed pandas DataFrame with the
             additional features
 
@@ -404,6 +401,25 @@ class BaseDataset(Dataset):
             return list(dict.fromkeys(self.cfg.dynamic_input))
         elif isinstance(self.cfg.dynamic_input, dict):
             return list(dict.fromkeys([item for sublist in self.cfg.dynamic_input.values() for item in sublist]))
+
+    def _unique_conceptual_input(self) -> List[str]:
+        """Process conceptual input variables.
+
+        Returns
+        -------
+        List[str]
+            List of unique dynamic input variables
+
+        """
+        conceptual_inputs = []
+        if isinstance(self.cfg.dynamic_input_conceptual_model, dict):
+            for v in self.cfg.dynamic_input_conceptual_model.values():
+                if isinstance(v, str):
+                    conceptual_inputs.append(v)
+                else:
+                    conceptual_inputs.extend(v)
+
+        return list(dict.fromkeys(conceptual_inputs))
 
     def calculate_basin_std(self):
         """Fill the self.basin_std dictionary with the standard deviation of the target variables for each basin.
@@ -480,19 +496,19 @@ class BaseDataset(Dataset):
             with open(self.cfg.path_save_folder / "scaler.pickle", "wb") as f:
                 pickle.dump(self.scaler, f)
 
-    def _check_std(self, std: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def _check_std(self, std: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Check if the standard deviation is (almost) zero and adjust.
 
         The 1e-5 is a threshold to consider a std as zero (due to numerical issues).
 
         Parameters
         ----------
-        std : Dict[str, torch.Tensor]
+        std : dict[str, torch.Tensor]
             Dictionary with the standard deviation of the variables
 
         Returns
         -------
-        Dict[str, torch.Tensor]
+        dict[str, torch.Tensor]
             Dictionary with the adjusted standard deviation
 
         """
@@ -541,8 +557,8 @@ class BaseDataset(Dataset):
 
     @staticmethod
     def collate_fn(
-        samples: List[Dict[str, Union[torch.Tensor, np.ndarray, Dict[str, torch.Tensor]]]],
-    ) -> Dict[str, Union[torch.Tensor, np.ndarray, Dict[str, torch.Tensor]]]:
+        samples: List[dict[str, Union[torch.Tensor, np.ndarray, dict[str, torch.Tensor]]]],
+    ) -> dict[str, Union[torch.Tensor, np.ndarray, dict[str, torch.Tensor]]]:
         """Collate a list of samples into a single batch.
 
         This function is used by the DataLoader to combine a list of individual samples
@@ -556,7 +572,7 @@ class BaseDataset(Dataset):
 
         Parameters
         ----------
-            samples (List[Dict]): A list of sample dictionaries, each returned by `__getitem__`.
+            samples (List[dict]): A list of sample dictionaries, each returned by `__getitem__`.
                 Each dictionary may contain:
                     - tensors
                     - numpy arrays
@@ -564,7 +580,7 @@ class BaseDataset(Dataset):
 
         Returns:
         ---------
-            Dict: A single dictionary with the same structure as the input samples,
+            dict: A single dictionary with the same structure as the input samples,
                 where values have been batched along the first dimension.
 
         References
@@ -577,7 +593,7 @@ class BaseDataset(Dataset):
             return batch
         features = list(samples[0].keys())
         for feature in features:
-            if feature.startswith(("x_d", "x_conceptual")):
+            if feature.startswith(("x_d")):
                 # Dynamic variables are stored as dictionaries with feature names as keys.
                 batch[feature] = {
                     k: torch.stack([sample[feature][k] for sample in samples], dim=0)
@@ -591,49 +607,15 @@ class BaseDataset(Dataset):
         return batch
 
 
-@njit()
-def validate_samples(
-    x: np.ndarray,
-    y: np.ndarray,
-    samples_id: np.ndarray,
-    ablation_flag: np.ndarray,
-    attributes: np.ndarray,
-    seq_length_hindcast: int,
-    seq_length_forecast: int,
-    predict_last_n: int,
-    freq_steps: np.ndarray,
-    hindcast_index: List[np.ndarray],
-    forecast_index: np.ndarray,
-    check_NaN: bool,
-) -> np.ndarray:
+def validate_samples(self, df_ts: pd.DataFrame, df_attributes: pd.DataFrame, check_NaN: bool) -> np.ndarray:
     """Checks for invalid samples due to NaN or insufficient sequence length.
-
-    This function was taken from Neural Hydrology [#]_ and adapted for our specific case.
 
     Parameters
     ----------
-    x : np.ndarray
-        array of dynamic input;
-    y : np.ndarray
-        array of target values;
-    samples_id : np.ndarray
-        Array with the indexes of the samples that will be checked.
-    ablation_flag: np.ndarray
-        1D-array of 0/1 flags for deliberate exclusion of samples (0 for exclusion)
-    attributes : np.ndarray
-        array containing the static attributes;
-    seq_length_hindcast : int
-        Sequence length of hindcast period
-    seq_length_forecast : int
-        Sequence length of forecast period
-    predict_last_n: int
-        Number of values that want to be used to calculate the loss
-    freq_steps : np.ndarray
-        Number of timesteps in each frequency
-    hindcast_index : List[np.ndarray]
-        List with the indexes of the hindcast input variables (with respect of columns of x) for each frequency
-    forecast_index : np.ndarray
-        Array with the indexes of the forecast input variables (with respect of columns of x)
+    df_ts : pd.DataFrame
+        DataFrame with time series of inputs and targets;
+    df_attributes : pd.DataFrame
+        DataFrame of static attributes;
     check_NaN : bool
         Boolean to specify if Nan should be checked or not
 
@@ -641,80 +623,71 @@ def validate_samples(
     -------
     flag:np.ndarray
         Array has a value of 1 for valid samples and a value of 0 for invalid samples.
-
-    References
-    ----------
-    .. [#] F. Kratzert, M. Gauch, G. Nearing and D. Klotz: NeuralHydrology -- A Python library for Deep Learning
-        research in hydrology. Journal of Open Source Software, 7, 4050, doi: 10.21105/joss.04050, 2022
-
     """
+    # Initialize binary flags
+    flag = np.ones(len(df_ts), dtype=bool)
 
-    # Number of samples we will check. It can be less than the total number of samples if we are using
-    # unique_prediction_blocks
-    n_samples = len(samples_id)
+    # Too early (not enough information)
+    flag &= np.arange(len(df_ts)) >= (self.cfg.seq_length_hindcast - 1)
 
-    # Initialize vector to store the flag: 1 means valid sample for training
-    flag = np.ones(n_samples)
+    # Too late, not enough information to get a full forecast
+    last_forecast = len(df_ts) - self.cfg.seq_length_forecast
+    flag &= np.arange(len(df_ts)) < last_forecast
 
-    for i in prange(n_samples):  # iterate through all samples
-        # id of the block we are considering
-        block_index = samples_id[i]
+    if check_NaN:
+        # -------------------------
+        # Check attributes: any NaN in the static features makes all the sample invalid
+        # -------------------------
+        if df_attributes is not None:
+            if df_attributes.isna().values.any():
+                flag[:] = False
+                return flag
 
-        # too early, not enough information
-        if block_index < seq_length_hindcast - 1:
-            flag[i] = 0
-            continue
+        # -------------------------
+        # Hindcast NaN check: any-NaN in the x makes the sample invalid
+        # -------------------------
+        # If I use the same variables along the sequence length
+        if isinstance(self.cfg.dynamic_input, list):
+            # values of interest
+            x = df_ts[self.hindcast_input].values
+            x_slide_view = sliding_window_view(x, (self.cfg.seq_length_hindcast, x.shape[1]))
+            mask = ~np.any(np.isnan(x_slide_view), axis=(2, 3)).flatten()
+            flag[self.cfg.seq_length_hindcast - 1 :] &= mask
 
-        # too late, not enough information to get a full forecast
-        if forecast_index is not None and block_index + seq_length_forecast +1 > x.shape[0]:
-            flag[i] = 0
-            continue
-        
-        # Check inputs in hindcast period
-        if check_NaN:
-            # If we have only one temporal frequency or all the temporal frequencies have the same variables
-            if len(hindcast_index) ==1:
-                x_sample = x[block_index - seq_length_hindcast + 1 : block_index + 1, hindcast_index[0]]
-                if np.any(np.isnan(x_sample)):
-                    flag[i] = 0
-                    continue
+        # If I use the different variables along the sequence length
+        elif isinstance(self.cfg.dynamic_input, dict):
+            aux_index = 0
+            for k, v in self.cfg.custom_seq_processing.items():
+                x = df_ts[self.cfg.dynamic_input[k]].values
+                x_slide_view = sliding_window_view(x, (self.cfg.seq_length_hindcast, x.shape[1]))
+                x_freq_subset = x_slide_view[:, :, aux_index : aux_index + (v["n_steps"] * v["freq_factor"])]
+                mask = ~np.any(np.isnan(x_freq_subset), axis=(2, 3)).flatten()
+                flag[self.cfg.seq_length_hindcast - 1 :] &= mask
+                aux_index += v["n_steps"] * v["freq_factor"]
 
-            else: # if we have multiple temporal frequencies, each with different variables
-                aux_index = 0
-                for freq_idx, sample_length in enumerate(freq_steps):
-                    # Sample only the variables and timesteps of interest for the given frequency
-                    i_start = block_index - seq_length_hindcast + 1 + aux_index
-                    x_sample = x[i_start : i_start + sample_length, hindcast_index[freq_idx]]
-                    aux_index += sample_length
-                    if np.any(np.isnan(x_sample)):
-                        flag[i] = 0
-                        break  # if one frequency is invalid, we do not need to check the other frequencies
+        # -------------------------
+        # Target NaN check: all-NaN in the targets makes the sample invalid
+        # -------------------------
+        i_start = self.cfg.seq_length_hindcast + self.cfg.seq_length_forecast - self.cfg.predict_last_n
+        y = df_ts[self.cfg.target].values[i_start:]
+        y_slide_view = sliding_window_view(y, (self.cfg.predict_last_n, y.shape[1]))
+        mask = ~np.all(np.isnan(y_slide_view), axis=(2, 3)).flatten()
+        flag[self.cfg.seq_length_hindcast - 1 : last_forecast] &= mask
 
-                if flag[i] == 0:  # if the input is invalid, we do not need to check other conditions
-                    continue
+        # -------------------------
+        # Forecast NaN check: any-NaN in the x makes the sample invalid
+        # -------------------------
+        if self.cfg.forecast_input:
+            x = df_ts[self.cfg.forecast_input].values[self.cfg.seq_length_hindcast :]
+            x_slide_view = sliding_window_view(x, (self.cfg.seq_length_forecast, x.shape[1]))
+            mask = ~np.any(np.isnan(x_slide_view), axis=(2, 3)).flatten()
+            flag[self.cfg.seq_length_hindcast - 1 : last_forecast] &= mask
 
-        # Check inputs in forecast period
-        if check_NaN and forecast_index is not None:
-            x_sample = x[block_index + 1 : block_index + 1 + seq_length_forecast, forecast_index]
-            if np.any(np.isnan(x_sample)):
-                flag[i] = 0
-                continue
-
-        # all-NaN in the targets makes the sample invalid
-        if check_NaN:
-            y_sample = y[block_index + seq_length_forecast + 1 - predict_last_n : block_index + seq_length_forecast + 1]
-            if np.all(np.isnan(y_sample)):
-                flag[i] = 0
-                continue
-
-        # any NaN in the static features makes the sample invalid
-        if attributes is not None and check_NaN:
-            if np.any(np.isnan(attributes)):
-                flag[i] = 0
-                continue
-
-        if ablation_flag is not None:
-            if ablation_flag[i] == 0 or np.isnan(ablation_flag[i]):
-                flag[i] = 0
+        # -------------------------
+        # Ablation_flag check: If I want to exclude certain points
+        # -------------------------
+        if "ablation_flag" in df_ts.columns:
+            ablation_flag = df_ts["ablation_flag"].values
+            flag &= (ablation_flag != 0) & (~np.isnan(ablation_flag))
 
     return flag

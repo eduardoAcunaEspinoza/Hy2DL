@@ -82,8 +82,8 @@ class InputLayer(nn.Module):
                                       spec=cfg.static_embedding["hiddens"],
                                       activation=cfg.static_embedding["activation"],
                                       dropout=cfg.static_embedding["dropout"]
-                                      )
-                if isinstance(cfg.static_embedding, dict)
+                                     )
+               if isinstance(cfg.static_embedding, dict)
                 else nn.Identity()
             )
 

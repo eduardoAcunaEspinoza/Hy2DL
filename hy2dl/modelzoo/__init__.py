@@ -1,8 +1,10 @@
 import torch.nn as nn
+from hy2dl.utils.config import Config
 
+# Deep learning methods
 from hy2dl.modelzoo.cudalstm import CudaLSTM
 from hy2dl.modelzoo.arlstm import ARLSTM
-from hy2dl.utils.config import Config
+from hy2dl.modelzoo.hybrid import Hybrid
 
 
 def get_model(cfg: Config) -> nn.Module:
@@ -23,6 +25,8 @@ def get_model(cfg: Config) -> nn.Module:
         model = CudaLSTM(cfg=cfg)
     elif cfg.model.lower() == "arlstm":
         model = ARLSTM(cfg=cfg)
+    elif cfg.model.lower() == "hybrid":
+        model = Hybrid(cfg=cfg)
     else:
         raise NotImplementedError(f"{cfg.model} not implemented or not linked in `get_model()`")
 

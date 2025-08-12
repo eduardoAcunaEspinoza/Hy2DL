@@ -35,7 +35,7 @@ class CudaLSTM(nn.Module):
         if cfg.initial_forget_bias is not None:
             self.lstm.bias_hh_l0.data[cfg.hidden_size : 2 * cfg.hidden_size] = cfg.initial_forget_bias
 
-    def forward(self, sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]):
+    def forward(self, sample: dict[str, torch.Tensor | dict[str, torch.Tensor]])-> dict[str, torch.Tensor]:
         """Forward pass of lstm network
 
         Parameters

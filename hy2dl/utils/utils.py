@@ -1,4 +1,3 @@
-import os
 import random
 
 import numpy as np
@@ -38,28 +37,3 @@ def set_random_seed(cfg: Config):
     np.random.seed(cfg.random_seed)
     torch.cuda.manual_seed(cfg.random_seed)
     torch.manual_seed(cfg.random_seed)
-
-
-def write_report(cfg: Config, text: str):
-    """Write a given text into a text file.
-
-    If the file where one wants to write does not exists, it creates a new one.
-
-    Parameters
-    ----------
-    cfg : Config
-        Configuration file.
-    text : str
-        Text that wants to be added
-
-    """
-    file_path = cfg.path_save_folder / "run_progress.txt"
-
-    if os.path.exists(file_path):
-        append_write = "a"  # append if already exists
-    else:
-        append_write = "w"  # make a new file if not
-
-    highscore = open(file_path, append_write)
-    highscore.write(text + "\n")
-    highscore.close()

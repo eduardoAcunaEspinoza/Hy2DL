@@ -1,0 +1,61 @@
+experiment_name: LSTM_CAMELS_GB
+path_data: ../data/CAMELS_GB
+path_entities_training: ../data/basin_id/basins_camels_gb_669.txt
+path_entities_validation: ../data/basin_id/basins_camels_gb_518.txt
+path_entities_testing: ../data/basin_id/basins_camels_gb_518.txt
+dynamic_input:
+- precipitation
+- peti
+- temperature
+target:
+- discharge_spec
+static_input:
+- area
+- elev_mean
+- dpsbar
+- sand_perc
+- silt_perc
+- clay_perc
+- porosity_hypres
+- conductivity_hypres
+- soil_depth_pelletier
+- dwood_perc
+- ewood_perc
+- crop_perc
+- urban_perc
+- reservoir_cap
+- p_mean
+- pet_mean
+- p_seasonality
+- frac_snow
+- high_prec_freq
+- low_prec_freq
+- high_prec_dur
+- low_prec_dur
+training_period:
+- '1980-10-01'
+- '1997-12-31'
+validation_period:
+- '1975-10-01'
+- '1980-09-30'
+testing_period:
+- '1998-01-01'
+- '2008-12-31'
+seq_length: 365
+hidden_size: 64
+batch_size_training: 256
+batch_size_evaluation: 1024
+epochs: 30
+dropout_rate: 0.4
+learning_rate:
+  1: 0.001
+  10: 0.0005
+  20: 0.0001
+validate_every: 5
+validate_n_random_basins: -1
+device: cuda:0
+num_workers: 4
+random_seed: 1
+dataset: CAMELS_GB
+model: CudaLSTM
+initial_forget_bias: 3.0
