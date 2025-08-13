@@ -1,0 +1,55 @@
+experiment_name: LSTM_CAMELS_DE
+path_data: ../data/CAMELS_DE
+path_entities: ../data/basin_id/basins_camels_de_1583.txt
+dynamic_input:
+- precipitation_mean
+- precipitation_stdev
+- radiation_global_mean
+- temperature_min
+- temperature_max
+target:
+- discharge_spec
+static_input:
+- area
+- elev_mean
+- clay_0_30cm_mean
+- sand_0_30cm_mean
+- silt_0_30cm_mean
+- artificial_surfaces_perc
+- agricultural_areas_perc
+- forests_and_seminatural_areas_perc
+- wetlands_perc
+- water_bodies_perc
+- p_mean
+- p_seasonality
+- frac_snow
+- high_prec_freq
+- low_prec_freq
+- high_prec_dur
+- low_prec_dur
+training_period:
+- '1970-10-01'
+- '1999-12-31'
+validation_period:
+- '1965-10-01'
+- '1970-09-30'
+testing_period:
+- '2000-01-01'
+- '2020-12-31'
+seq_length: 365
+hidden_size: 128
+batch_size_training: 256
+batch_size_evaluation: 1024
+epochs: 20
+dropout_rate: 0.4
+learning_rate: 0.001
+steplr_step_size: 10
+steplr_gamma: 0.5
+validate_every: 4
+validate_n_random_basins: -1
+device: gpu
+num_workers: 4
+random_seed: 110
+dataset: camels_de
+model: CudaLSTM
+initial_forget_bias: 3.0

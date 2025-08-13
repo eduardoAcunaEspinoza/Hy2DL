@@ -1,0 +1,84 @@
+experiment_name: mfLSTM_camels_us_hourly
+path_data: ../data/CAMELS_US
+path_entities: ../data/basin_id/basins_camels_us_hourly_516.txt
+dynamic_input:
+- convective_fraction
+- longwave_radiation
+- potential_energy
+- potential_evaporation
+- pressure
+- shortwave_radiation
+- specific_humidity
+- temperature
+- total_precipitation
+- wind_u
+- wind_v
+target:
+- QObs(mm/h)
+forcings:
+- nldas_hourly
+static_input:
+- elev_mean
+- slope_mean
+- area_gages2
+- frac_forest
+- lai_max
+- lai_diff
+- gvf_max
+- gvf_diff
+- soil_depth_pelletier
+- soil_depth_statsgo
+- soil_porosity
+- soil_conductivity
+- max_water_content
+- sand_frac
+- silt_frac
+- clay_frac
+- carbonate_rocks_frac
+- geol_permeability
+- p_mean
+- pet_mean
+- aridity
+- frac_snow
+- high_prec_freq
+- high_prec_dur
+- low_prec_freq
+- low_prec_dur
+training_period:
+- '1990-10-01 00:00:00'
+- '2003-09-30 23:00:00'
+validation_period:
+- '2003-10-01 00:00:00'
+- '2008-09-30 23:00:00'
+testing_period:
+- '2008-10-01 00:00:00'
+- '2018-09-30 23:00:00'
+hidden_size: 128
+batch_size_training: 256
+batch_size_evaluation: 1024
+epochs: 30
+dropout_rate: 0.4
+learning_rate:
+  1: 0.0005
+  10: 0.0001
+  25: 1.0e-05
+validate_every: 4
+validate_n_random_basins: -1
+seq_length: 8760
+custom_seq_processing:
+  1D:
+    n_steps: 351
+    freq_factor: 24
+  1h:
+    n_steps: 336
+    freq_factor: 1
+custom_seq_processing_flag: true
+predict_last_n: 24
+unique_prediction_blocks: true
+dynamic_embedding: null
+device: gpu
+num_workers: 4
+random_seed: 110
+dataset: hourly_camels_us
+model: CudaLSTM
+initial_forget_bias: 3.0

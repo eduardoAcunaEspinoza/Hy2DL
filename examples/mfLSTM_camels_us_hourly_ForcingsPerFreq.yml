@@ -1,0 +1,110 @@
+experiment_name: mfLSTM_camels_us_hourly_ForcingsPerFreq
+path_data: ../data/CAMELS_US
+path_entities: ../data/basin_id/basins_camels_us_hourly_516.txt
+dynamic_input:
+  1D:
+  - prcp(mm/day)_daymet
+  - srad(W/m2)_daymet
+  - tmax(C)_daymet
+  - tmin(C)_daymet
+  - vp(Pa)_daymet
+  - prcp(mm/day)_maurer_extended
+  - srad(W/m2)_maurer_extended
+  - tmax(C)_maurer_extended
+  - tmin(C)_maurer_extended
+  - vp(Pa)_maurer_extended
+  1h:
+  - convective_fraction_nldas_hourly
+  - longwave_radiation_nldas_hourly
+  - potential_energy_nldas_hourly
+  - potential_evaporation_nldas_hourly
+  - pressure_nldas_hourly
+  - shortwave_radiation_nldas_hourly
+  - specific_humidity_nldas_hourly
+  - temperature_nldas_hourly
+  - total_precipitation_nldas_hourly
+  - wind_u_nldas_hourly
+  - wind_v_nldas_hourly
+  - prcp(mm/day)_daymet
+  - srad(W/m2)_daymet
+  - tmax(C)_daymet
+  - tmin(C)_daymet
+  - vp(Pa)_daymet
+  - prcp(mm/day)_maurer_extended
+  - srad(W/m2)_maurer_extended
+  - tmax(C)_maurer_extended
+  - tmin(C)_maurer_extended
+  - vp(Pa)_maurer_extended
+target:
+- QObs(mm/h)
+forcings:
+- nldas_hourly
+- daymet
+- maurer_extended
+static_input:
+- elev_mean
+- slope_mean
+- area_gages2
+- frac_forest
+- lai_max
+- lai_diff
+- gvf_max
+- gvf_diff
+- soil_depth_pelletier
+- soil_depth_statsgo
+- soil_porosity
+- soil_conductivity
+- max_water_content
+- sand_frac
+- silt_frac
+- clay_frac
+- carbonate_rocks_frac
+- geol_permeability
+- p_mean
+- pet_mean
+- aridity
+- frac_snow
+- high_prec_freq
+- high_prec_dur
+- low_prec_freq
+- low_prec_dur
+training_period:
+- '1990-10-01 00:00:00'
+- '2003-09-30 23:00:00'
+validation_period:
+- '2003-10-01 00:00:00'
+- '2008-09-30 23:00:00'
+testing_period:
+- '2008-10-01 00:00:00'
+- '2018-09-30 23:00:00'
+hidden_size: 128
+batch_size_training: 256
+batch_size_evaluation: 1024
+epochs: 30
+dropout_rate: 0.4
+learning_rate:
+  1: 0.0005
+  10: 0.0001
+  25: 1.0e-05
+validate_every: 4
+validate_n_random_basins: -1
+seq_length: 8760
+custom_seq_processing:
+  1D:
+    n_steps: 351
+    freq_factor: 24
+  1h:
+    n_steps: 336
+    freq_factor: 1
+custom_seq_processing_flag: false
+predict_last_n: 24
+unique_prediction_blocks: true
+dynamic_embedding:
+  hiddens:
+  - 10
+device: gpu
+num_workers: 4
+random_seed: 110
+dataset: hourly_camels_us
+model: CudaLSTM
+initial_forget_bias: 3.0

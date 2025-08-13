@@ -1,5 +1,6 @@
 # import necessary packages
-from typing import List, Optional, Union
+from pathlib import Path
+from typing import Dict, List, Optional, Union
 
 import pandas as pd
 
@@ -7,19 +8,18 @@ from hy2dl.datasetzoo.basedataset import BaseDataset
 from hy2dl.utils.config import Config
 
 
-class CAMELS_DE(BaseDataset):
-    """
-    Class to process data from [version 1.0.0 of the CAMELS Germany dataset]
-    (https://doi.org/10.5281/zenodo.13837553) by [1]_, [2]_ .
+class Luxemburg(BaseDataset):
+    """Class to process data from the Luxemburg dataset
 
     The class inherits from BaseDataset to execute the operations on how to load and process the data. However here we
-    code the _read_attributes and _read_data methods, that specify how we should read the information from CAMELS DE.
+    code the _read_attributes and _read_data methods, that specify how we should read the information from Luxemburg dataset.
+
 
     Parameters
     ----------
     cfg : Config
         Configuration file.
-    period : {'training', 'validation', 'testing'}
+    time_period : {'training', 'validation', 'testing'}
         Defines the period for which the data will be loaded.
     check_NaN : Optional[bool], default=True
         Whether to check for NaN values while processing the data. This should typically be True during training,
@@ -27,16 +27,7 @@ class CAMELS_DE(BaseDataset):
     entity : Optional[str], default=None
         ID of the entity (e.g., single catchment's ID) to be analyzed
 
-    References
-    ----------
-    .. [1] Loritz, R., Dolich, A., Acuña Espinoza, E., Ebeling, P., Guse, B., Götte, J., Hassler, S. K., Hauffe,
-        C., Heidbüchel, I., Kiesel, J., Mälicke, M., Müller-Thomy, H., Stölzle, M., & Tarasova, L. (2024).
-        CAMELS-DE: Hydro-meteorological time series and attributes for 1555 catchments in Germany.
-        Earth System Science Data Discussions, 2024, 1–30. https://doi.org/10.5194/essd-2024-318
-    .. [2] Dolich, A., Espinoza, E. A., Ebeling, P., Guse, B., Götte, J., Hassler, S., Hauffe, C., Kiesel, J.,
-        Heidbüchel, I., Mälicke, M., Müller-Thomy, H., Stölzle, M., Tarasova, L., & Loritz, R. (2024).
-        CAMELS-DE: hydrometeorological time series and attributes for 1582 catchments in Germany (1.0.0) [Data set].
-        Zenodo. https://doi.org/10.5281/zenodo.13837553
+
 
     """
 
@@ -48,7 +39,7 @@ class CAMELS_DE(BaseDataset):
         entities_ids: Optional[Union[str, List[str]]] = None,
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
-        super(CAMELS_DE, self).__init__(
+        super(Luxemburg, self).__init__(
             cfg=cfg, time_period=time_period, check_NaN=check_NaN, entities_ids=entities_ids
         )
 
@@ -94,11 +85,22 @@ class CAMELS_DE(BaseDataset):
 
         Returns
         -------
-        df: pd.DataFrame
+        df : pd.DataFrame
             Dataframe with the catchments` timeseries
 
         """
-        path_timeseries = self.cfg.path_data / "timeseries" / f"CAMELS_DE_hydromet_timeseries_{catch_id}.csv"
+        path_timeseries = self.cfg.path_data / "timeseries" / f"hydromet_timeseries_{catch_id}.csv"
+        
         # load time series
         df = pd.read_csv(path_timeseries, index_col="date", parse_dates=["date"])
+
+        # Check for problematic columns
+        for column in df.columns:
+            if df[column].dtype == "object":  # Likely mixed types or strings
+                df[column] = pd.to_numeric(df[column], errors="coerce")  # Coerce non-numeric to NaN
+
+        # calculate specific discharge [mm/h] -> Q[m3/s]*[3600s/1h]*[1000mm/1m]/[area in m2] = Q[mm/h]
+        area = self._read_attributes().loc[catch_id, "area"] * 1000 * 1000  # area in m2
+        df["discharge"] = df["discharge"] * 3600 * 1000 / area
+
         return df

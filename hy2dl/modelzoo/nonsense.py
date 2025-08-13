@@ -1,8 +1,9 @@
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import torch
 
 from hy2dl.modelzoo.baseconceptualmodel import BaseConceptualModel
+from hy2dl.utils.config import Config
 
 
 class NonSense(BaseConceptualModel):
@@ -14,60 +15,50 @@ class NonSense(BaseConceptualModel):
 
     Parameters
     ----------
-    n_models : int
-        Number of model entities that will be run at the same time (in parallel)
-    parameter_type : List[str]
-        List to specify which parameters of the conceptual model will be dynamic.
+    cfg : Config
+        Configuration file.
 
     References
     ----------
-    .. [#] Acuña Espinoza, E., Loritz, R., Álvarez Chaves, M., Bäuerle, N., and Ehret, U.: To Bucket or not to Bucket? 
-        Analyzing the performance and interpretability of hybrid hydrological models with dynamic parameterization, 
+    .. [#] Acuña Espinoza, E., Loritz, R., Álvarez Chaves, M., Bäuerle, N., and Ehret, U.: To Bucket or not to Bucket?
+        Analyzing the performance and interpretability of hybrid hydrological models with dynamic parameterization,
         Hydrology and Earth System Sciences, 28, 2705–2719, https://doi.org/10.5194/hess-28-2705-2024, 2024.
-    
+
     """
 
-    def __init__(self, n_models: int = 1, parameter_type: List[str] = None):
+    def __init__(self, cfg: Config):
         super(NonSense, self).__init__()
-        self.n_conceptual_models = n_models
-        self.parameter_type = self._map_parameter_type(parameter_type=parameter_type)
-        self.output_size = 1
+        self.n_conceptual_models = cfg.num_conceptual_models
+        self.parameter_type = self._map_parameter_type(cfg=cfg)
 
     def forward(
         self,
-        x_conceptual: torch.Tensor,
-        parameters: Dict[str, torch.Tensor],
-        initial_states: Optional[Dict[str, torch.Tensor]] = None,
-    ) -> Dict[str, Union[torch.Tensor, Dict[str, torch.Tensor]]]:
-        """
-        Forward pass of the Nonsense model (conceptual model).
-
-        In the forward pass, each element of the batch is associated with a basin, therefore, the conceptual model is
-        run for multiple basins in parallel, and also for multiple entities of the model (n_models) at the same time.
+        x_conceptual: dict[str, torch.Tensor],
+        parameters: dict[str, torch.Tensor],
+        initial_states: Optional[dict[str, torch.Tensor]] = None,
+    ) -> dict[str, Union[torch.Tensor, dict[str, torch.Tensor]]]:
+        """Forward pass of the Nonsense model (conceptual model).
 
         Parameters
         ----------
-        x_conceptual: torch.Tensor
-            Tensor of size [batch_size, time_steps, n_inputs]. The batch_size is associated with a certain basin and a
-            certain prediction period. The time_steps refer to the number of time steps (e.g. days) that the conceptual
-            model is going to be run for. The n_inputs refer to the dynamic forcing used to run the conceptual model
-            (e.g. precipitation, temperature, ...)
-        parameters: Dict[str, torch.Tensor]
-            Dict with parametrization of the conceptual model.
-        initial_states: Optional[Dict[str, torch.Tensor]]
+        x_conceptual: dict[str, torch.Tensor]
+            dictionary with the different inputs as tensors of size [batch_size, time_steps].
+        parameters: dict[str, torch.Tensor]
+            dict with parametrization of the conceptual model.
+        initial_states: Optional[dict[str, torch.Tensor]]
             Optional parameter! In case one wants to specify the initial state of the internal states of the conceptual
             model.
 
         Returns
         -------
-        Dict[str, Union[torch.Tensor, Dict[str, torch.Tensor]]]
+        dict[str, Union[torch.Tensor, dict[str, torch.Tensor]]]
             y_hat: torch.Tensor
                 Simulated outflow
-            parameters: Dict[str, torch.Tensor]
+            parameters: dict[str, torch.Tensor]
                 Dynamic parameters of the conceptual model
-            internal_states: Dict[str, torch.Tensor]
+            internal_states: dict[str, torch.Tensor]
                 Time evolving internal states of the conceptual model
-            last_states: Dict[str, torch.Tensor]
+            last_states: dict[str, torch.Tensor]
                 Internal states of the conceptual model for the last time-step
 
         """
@@ -75,14 +66,16 @@ class NonSense(BaseConceptualModel):
         states, out = self._initialize_information(conceptual_inputs=x_conceptual)
 
         # initialize constants
-        zero = torch.tensor(0.00, dtype=torch.float32, device=x_conceptual.device)
-        one = torch.tensor(1.00, dtype=torch.float32, device=x_conceptual.device)
-        klu = torch.tensor(0.90, dtype=torch.float32, device=x_conceptual.device)  # land use correction factor [-]
+        batch_size, seq_length = x_conceptual["precipitation"].shape
+        device = x_conceptual["precipitation"].device
+        zero = torch.tensor(0.0, dtype=torch.float32, device=device)
+        one = torch.tensor(1.0, dtype=torch.float32, device=device)
+        klu = torch.tensor(0.90, dtype=torch.float32, device=device)  # land use correction factor [-]
 
-        # Broadcast input tensor to consider multiple conceptual models in parallel
-        precipitation = torch.tile(x_conceptual[:, :, 0].unsqueeze(2), (1, 1, self.n_conceptual_models))
-        et = torch.tile(x_conceptual[:, :, 1].unsqueeze(2), (1, 1, self.n_conceptual_models))
-        temperature = torch.tile(x_conceptual[:, :, 2].unsqueeze(2), (1, 1, self.n_conceptual_models))
+        # Reshape tensor to consider multiple conceptual models running in parallel
+        precipitation = torch.tile(x_conceptual["precipitation"].unsqueeze(2), (1, 1, self.n_conceptual_models))
+        temperature = torch.tile(x_conceptual["temperature"].unsqueeze(2), (1, 1, self.n_conceptual_models))
+        et = torch.tile(x_conceptual["pet"].unsqueeze(2), (1, 1, self.n_conceptual_models))
 
         # Division between solid and liquid precipitation can be done outside of the loop as temperature is given
         temp_mask = temperature < 0
@@ -95,32 +88,32 @@ class NonSense(BaseConceptualModel):
         snow = precipitation.clone()
         snow[~temp_mask] = zero
         # Permanent wilting point (pwp) used in ET
-        pwp = torch.tensor(0.8, dtype=torch.float32, device=x_conceptual.device) * parameters["sumax"]
+        pwp = torch.tensor(0.8, dtype=torch.float32, device=device) * parameters["sumax"]
 
         if initial_states is None:  # if not specified, take the default values
             ss = torch.full(
-                (x_conceptual.shape[0], self.n_conceptual_models),
+                (batch_size, self.n_conceptual_models),
                 self._initial_states["ss"],
                 dtype=torch.float32,
-                device=x_conceptual.device,
+                device=device,
             )
             sb = torch.full(
-                (x_conceptual.shape[0], self.n_conceptual_models),
+                (batch_size, self.n_conceptual_models),
                 self._initial_states["sb"],
                 dtype=torch.float32,
-                device=x_conceptual.device,
+                device=device,
             )
             si = torch.full(
-                (x_conceptual.shape[0], self.n_conceptual_models),
+                (batch_size, self.n_conceptual_models),
                 self._initial_states["si"],
                 dtype=torch.float32,
-                device=x_conceptual.device,
+                device=device,
             )
             su = torch.full(
-                (x_conceptual.shape[0], self.n_conceptual_models),
+                (batch_size, self.n_conceptual_models),
                 self._initial_states["su"],
                 dtype=torch.float32,
-                device=x_conceptual.device,
+                device=device,
             )
         else:  # specified initial states
             ss = initial_states["ss"]
@@ -129,7 +122,7 @@ class NonSense(BaseConceptualModel):
             su = initial_states["su"]
 
         # Run hydrologycal model for every time step
-        for j in range(x_conceptual.shape[1]):
+        for j in range(seq_length):
             # Snow module --------------------------
             qs_out = torch.minimum(ss, snow_melt[:, j, :])
             ss = ss - qs_out + snow[:, j, :]
@@ -165,7 +158,7 @@ class NonSense(BaseConceptualModel):
             states["su"][:, j, :] = su
 
             # Outflow
-            out[:, j, :] = qu_out  # [mm]
+            out[:, j, 0] = torch.mean(qu_out, dim=1)  # [mm]
 
         # Save last states
         final_states = self._get_final_states(states=states)
@@ -173,9 +166,9 @@ class NonSense(BaseConceptualModel):
         return {"y_hat": out, "parameters": parameters, "internal_states": states, "final_states": final_states}
 
     @property
-    def _initial_states(self) -> Dict[str, float]:
+    def _initial_states(self) -> dict[str, float]:
         return {"ss": 0.0, "su": 5.0, "si": 10.0, "sb": 15.0}
 
     @property
-    def parameter_ranges(self) -> Dict[str, Tuple[float, float]]:
+    def parameter_ranges(self) -> dict[str, Tuple[float, float]]:
         return {"dd": (0.0, 10.0), "sumax": (20.0, 700.0), "beta": (1.0, 6.0), "ki": (1.0, 100.0), "kb": (10.0, 1000.0)}

@@ -1,7 +1,9 @@
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+
+from hy2dl.utils.config import Config
 
 
 class BaseConceptualModel(nn.Module):
@@ -12,22 +14,20 @@ class BaseConceptualModel(nn.Module):
 
     """
 
-    def __init__(
-        self,
-    ):
+    def __init__(self):
         super(BaseConceptualModel, self).__init__()
 
     def forward(
         self,
-        x_conceptual: torch.Tensor,
-        parameters: Dict[str, torch.Tensor],
-        initial_states: Optional[Dict[str, torch.Tensor]] = None,
-    ) -> Dict[str, Union[torch.Tensor, Dict[str, torch.Tensor]]]:
+        x_conceptual: dict[str, torch.Tensor],
+        parameters: dict[str, torch.Tensor],
+        initial_states: Optional[dict[str, torch.Tensor]] = None,
+    ) -> dict[str, Union[torch.Tensor, dict[str, torch.Tensor]]]:
         raise NotImplementedError
 
     def map_parameters(
         self, lstm_out: torch.Tensor, warmup_period: int
-    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+    ) -> Tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         """Map output of data-driven part to predefined ranges of the conceptual model parameters.
 
         The result are two dictionaries, one contains the parameters for the warmup period of the conceptual model and
@@ -50,10 +50,10 @@ class BaseConceptualModel(nn.Module):
 
         Returns
         -------
-        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]
-            - parameters_warmup : Dict[str, torch.Tensor]
+        Tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]
+            - parameters_warmup : dict[str, torch.Tensor]
                 Parameters for the warmup period (always static!)
-            - parameters_simulation : Dict[str, torch.Tensor]
+            - parameters_simulation : dict[str, torch.Tensor]
                 Parameterization of the conceptual model in the training/testing period. Can be static or dynamic
 
         """
@@ -86,7 +86,7 @@ class BaseConceptualModel(nn.Module):
 
         return parameters_warmup, parameters_simulation
 
-    def _map_parameter_type(self, parameter_type: List[str] = None):
+    def _map_parameter_type(self, cfg: Config) -> dict[str, str]:
         """Define parameter type, static or dynamic.
 
         The model parameters can be static or dynamic. This function creates a dictionary that associate the parameter
@@ -95,79 +95,77 @@ class BaseConceptualModel(nn.Module):
 
         Parameters
         ----------
-        parameter_type : List[str]
-            List to specify which parameters of the conceptual model will be dynamic.
+        cfg : Config
+            Configuration file.
 
         Returns
         -------
-        map_parameter_type: Dict[str, str]
-            Dictionary
+        map_parameter_type: dict[str, str]
+            dictionary
 
         """
         map_parameter_type = {}
-        for key, _ in self.parameter_ranges.items():
-            if parameter_type is not None and key in parameter_type:  # if user specified the type
+        for key in self.parameter_ranges:
+            if cfg.dynamic_parameterization_conceptual_model and key in cfg.dynamic_parameterization_conceptual_model:
                 map_parameter_type[key] = "dynamic"
             else:  # default initialization
                 map_parameter_type[key] = "static"
 
         return map_parameter_type
 
-    def _initialize_information(self, conceptual_inputs: torch.Tensor) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+    def _initialize_information(
+        self, conceptual_inputs: dict[str, torch.Tensor]
+    ) -> Tuple[dict[str, torch.Tensor], torch.Tensor]:
         """Initialize structures to store the time evolution of the internal states and the outflow
 
         Parameters
         ----------
-        conceptual_inputs: torch.Tensor
-            Inputs of the conceptual model
+        conceptual_inputs: dict[str, torch.Tensor]
+            Dictionary with the different inputs as tensors of size [batch_size, time_steps].
 
         Returns
         -------
-        Tuple[Dict[str, torch.Tensor], torch.Tensor]
-            - states: Dict[str, torch.Tensor]
-                Dictionary to store the time evolution of the internal states (buckets) of the conceptual model
+        Tuple[dict[str, torch.Tensor], torch.Tensor]
+            - states: dict[str, torch.Tensor]
+                dictionary to store the time evolution of the internal states (buckets) of the conceptual model
             - q_out: torch.Tensor
                 Tensor to store the outputs of the conceptual model
 
         """
+        model_input = next(iter(conceptual_inputs.values()))  # select a variable from dictionary (all have same shape)
+        batch_size, seq_length = model_input.shape
         states = {}
         # initialize dictionary to store the evolution of the states
-        for name, _ in self._initial_states.items():
+        for name in self._initial_states:
             states[name] = torch.zeros(
-                (conceptual_inputs.shape[0], conceptual_inputs.shape[1], self.n_conceptual_models),
-                dtype=torch.float32,
-                device=conceptual_inputs.device,
+                (batch_size, seq_length, self.n_conceptual_models), dtype=torch.float32, device=model_input.device
             )
 
         # initialize vectors to store the evolution of the outputs
-        out = torch.zeros(
-            (conceptual_inputs.shape[0], conceptual_inputs.shape[1], self.output_size),
-            dtype=torch.float32,
-            device=conceptual_inputs.device,
-        )
+        out = torch.zeros((batch_size, seq_length, 1), dtype=torch.float32, device=model_input.device)
 
         return states, out
 
-    def _get_final_states(self, states: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def _get_final_states(self, states: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Recovers final states of the conceptual model.
 
         Parameters
         ----------
-        states : Dict[str, torch.Tensor]
-            Dictionary with the time evolution of the internal states (buckets) of the conceptual model
+        states : dict[str, torch.Tensor]
+            dictionary with the time evolution of the internal states (buckets) of the conceptual model
 
         Returns
         -------
-        Dict[str, torch.Tensor]
-            Dictionary with the internal states (buckets) of the conceptual model, on the last timestep
+        dict[str, torch.Tensor]
+            dictionary with the internal states (buckets) of the conceptual model, on the last timestep
 
         """
         return {name: state[:, -1, :] for name, state in states.items()}
 
     @property
-    def _initial_states(self) -> Dict[str, float]:
+    def _initial_states(self) -> dict[str, float]:
         raise NotImplementedError
 
     @property
-    def parameter_ranges(self) -> Dict[str, List[float]]:
+    def parameter_ranges(self) -> dict[str, List[float]]:
         raise NotImplementedError

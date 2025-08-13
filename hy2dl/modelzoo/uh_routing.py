@@ -1,14 +1,20 @@
-from typing import Dict, List, Tuple
+from typing import Tuple
 
 import torch
 
 from hy2dl.modelzoo.baseconceptualmodel import BaseConceptualModel
+from hy2dl.utils.config import Config
 
 
 class UH_routing(BaseConceptualModel):
     """Unit hydrograph routing based on gamma function.
 
     Implementation based on Feng et al. [1]_ and Croley [2]_.
+
+    Parameters
+    ----------
+    cfg : Config
+        Configuration file.
 
     References
     ----------
@@ -20,20 +26,19 @@ class UH_routing(BaseConceptualModel):
 
     """
 
-    def __init__(self, n_models: int = 1, parameter_type: List[str] = None):
+    def __init__(self, cfg: Config):
         super(UH_routing, self).__init__()
         self.n_conceptual_models = 1
-        self.parameter_type = self._map_parameter_type()
-        self.output_size = 1
+        self.parameter_type = self._map_parameter_type(cfg=cfg)
 
-    def forward(self, discharge: torch.Tensor, parameters: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def forward(self, discharge: torch.Tensor, parameters: dict[str, torch.Tensor]) -> torch.Tensor:
         """Forward pass on the routing model
 
         Parameters
         ----------
         discharge : torch.Tensor
             Discharge series.
-        parameters : Dict[str, torch.Tensor]
+        parameters : dict[str, torch.Tensor]
             Dictionary with parameterization of routing model.
 
         Returns
@@ -42,7 +47,7 @@ class UH_routing(BaseConceptualModel):
             Discharge series after applying the rouing module
 
         """
-        UH = self._gamma_routing(alpha=parameters["alpha"][:, 0, 0], beta=parameters["beta"][:, 0, 0], uh_len=15)
+        UH = self._gamma_routing(alpha=parameters["r_alpha"][:, 0, 0], beta=parameters["r_beta"][:, 0, 0], uh_len=15)
         y_routed = self._uh_conv(discharge, UH)
         return y_routed
 
@@ -114,5 +119,5 @@ class UH_routing(BaseConceptualModel):
         return routed_discharge.permute(1, 2, 0)  # Shape: (batch_size, timesteps, 1)
 
     @property
-    def parameter_ranges(self) -> Dict[str, Tuple[float, float]]:
-        return {"alpha": (0.0, 2.9), "beta": (0.0, 6.5)}
+    def parameter_ranges(self) -> dict[str, Tuple[float, float]]:
+        return {"r_alpha": (0.0, 2.9), "r_beta": (0.0, 6.5)}
