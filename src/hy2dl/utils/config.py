@@ -235,6 +235,10 @@ class Config(object):
     @property
     def device(self) -> str:
         return self._device
+    
+    @property
+    def distribution(self) -> str:
+        return self._cfg.get("distribution")
 
     @property
     def dropout_rate(self) -> float:
@@ -300,6 +304,10 @@ class Config(object):
     @property
     def nan_step_probability(self) -> float:
         return self._cfg.get("nan_step_probability", None)
+    
+    @property
+    def num_components(self) -> int:
+        return self._cfg.get("num_components")
 
     @property
     def num_conceptual_models(self) -> int:
@@ -360,7 +368,7 @@ class Config(object):
 
     @property
     def output_features(self) -> int:
-        return self._cfg.get("output_features", 1)
+        return len(self._cfg["target"])
 
     @property
     def random_seed(self) -> int:
