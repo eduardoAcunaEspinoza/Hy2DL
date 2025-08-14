@@ -25,12 +25,13 @@ class Config(object):
         research in hydrology. Journal of Open Source Software, 7, 4050, doi: 10.21105/joss.04050, 2022
     """
 
-    def __init__(self, yml_path_or_dict: dict):
+    def __init__(self, yml_path_or_dict: dict, dev_mode: bool = False):
         # read the config from a dictionary
         self._cfg = self._read_yaml(yml_path_or_dict)
 
         # Check if the config contains any unknown keys
-        Config._check_cfg_keys(cfg=self._cfg)
+        if not dev_mode:
+            Config._check_cfg_keys(cfg=self._cfg)
 
         # Check consistency in sequence length
         self._check_seq_length()
@@ -59,6 +60,10 @@ class Config(object):
 
         with open(self.path_save_folder / "config.yml", "w") as file:
             yaml.dump(temp_cfg, file, default_flow_style=False, sort_keys=False)
+
+    def to_dict(self) -> dict:
+        """Convert the configuration to a dictionary."""
+        return self._cfg
 
     def _check_embeddings(self):
         if isinstance(self.dynamic_input, dict) and self.dynamic_embedding is None:
