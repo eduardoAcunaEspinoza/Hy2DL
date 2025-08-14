@@ -3,15 +3,17 @@ name = "Hy2DL"
 version = "2.0.0"
 description = " Python library to create hydrological models for rainfall-runoff prediction using deep learning methods"
 readme = "README.md"
+license = {text = "LICENSE"}
+
 authors = [
     {name = "Eduardo Acuña Espinoza", email = "eduardo.espinoza@kit.edu"},
     {name = "Ralf Loritz", email = "ralf.loritz@kit.edu"},
     {name = "Manuel Álvarez Chaves", email = "manuel.alvarez-chaves@simtech.uni-stuttgart.de"}
 ]
-license = {text = "MIT"}
-requires-python = ">=3.9"
 
+requires-python = ">=3.9"
 dependencies = [
+    "ipykernel>=6.30.1",
     "matplotlib>=3.8.3",
     "numpy>=1.26.3",
     "pandas>2.2.0",
@@ -20,11 +22,11 @@ dependencies = [
     "tqdm>=4.67.1",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [dependency-groups]
 dev = [
     "scipy>=1.13.1",
 ]
+
+[build-system]
+requires = ["uv_build>=0.8.9,<0.9.0"]
+build-backend = "uv_build"
