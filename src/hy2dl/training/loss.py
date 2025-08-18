@@ -99,7 +99,7 @@ def loss_nll(
             loc, scale = params.values()
             scale = torch.clamp(scale, min=1e-6)
             p = (y - loc) / scale
-            log_p = -0.5 * p.pow(2) - torch.log(scale) - 0.5 * torch.log(2 * pi)
+            log_p = -0.5 * p.pow(2) - torch.log(scale) - 0.5 * torch.log(torch.tensor(2 * pi))
 
         case Distribution.LAPLACIAN:
             loc, scale, kappa = params.values()
