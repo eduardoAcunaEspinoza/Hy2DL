@@ -1,10 +1,10 @@
 import torch.nn as nn
-from hy2dl.utils.config import Config
 
 # Deep learning methods
-from hy2dl.modelzoo.cudalstm import CudaLSTM
 from hy2dl.modelzoo.arlstm import ARLSTM
+from hy2dl.modelzoo.cudalstm import CudaLSTM
 from hy2dl.modelzoo.hybrid import Hybrid
+from hy2dl.utils.config import Config
 
 
 def get_model(cfg: Config) -> nn.Module:

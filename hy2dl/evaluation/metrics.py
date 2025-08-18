@@ -1,15 +1,13 @@
-from typing import Dict
-
 import numpy as np
 import pandas as pd
 
 
-def nse(df_results: Dict[str, pd.DataFrame], average: bool = True) -> np.array:
+def nse(df_results: dict[str, pd.DataFrame], average: bool = True) -> np.array:
     """Nash--Sutcliffe Efficiency.
 
     Parameters
     ----------
-    df_results : Dict[str, pd.DataFrame]
+    df_results : dict[str, pd.DataFrame]
         Dictionary, where each key is associated with a basin_id and each item is a pandas DataFrame.
         Each dataframe should contained at least two columns: y_sim for the simulated values and y_obs for the observed
         values.
@@ -50,12 +48,12 @@ def nse(df_results: Dict[str, pd.DataFrame], average: bool = True) -> np.array:
     return np.nanmedian(loss) if average else np.asarray(loss)
 
 
-def forecast_NSE(results: Dict[str, pd.DataFrame], filter: Dict[str, pd.DataFrame] = None) -> Dict[str, pd.DataFrame]:
+def forecast_NSE(results: dict[str, pd.DataFrame], filter: dict[str, pd.DataFrame] = None) -> dict[str, pd.DataFrame]:
     """Calculate the Nash--Sutcliffe Efficiency for each forecasted lead time.
 
     Parameters
     ----------
-    results : Dict[str, pd.DataFrame]
+    results : dict[str, pd.DataFrame]
         Dictionary, where each key is associated with a basin_id and each item is a datetime indexed pandas DataFrame.
 
 
@@ -101,12 +99,12 @@ def forecast_NSE(results: Dict[str, pd.DataFrame], filter: Dict[str, pd.DataFram
     return df_loss
 
 
-def forecast_PNSE(results: Dict[str, pd.DataFrame], filter: Dict[str, pd.DataFrame] = None) -> Dict[str, pd.DataFrame]:
+def forecast_PNSE(results: dict[str, pd.DataFrame], filter: dict[str, pd.DataFrame] = None) -> dict[str, pd.DataFrame]:
     """Calculate the persistence Nash--Sutcliffe Efficiency for each forecasted lead time.
 
     Parameters
     ----------
-    results : Dict[str, pd.DataFrame]
+    results : dict[str, pd.DataFrame]
         Dictionary, where each key is associated with a basin_id and each item is a datetime indexed pandas DataFrame.
 
 

@@ -82,7 +82,10 @@ class Config(object):
             and len(self.forecast_input) != len(self.dynamic_input)
         ):
             raise ValueError(
-                "`dynamic_input` and `forecast_input` have different dimensions. This is supported only if `dynamic_embedding` is specified"
+                (
+                    "`dynamic_input` and `forecast_input` have different dimensions. "
+                    "This is supported only if `dynamic_embedding` is specified"
+                )
             )
 
     def _check_num_workers(self):

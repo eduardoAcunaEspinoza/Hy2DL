@@ -155,7 +155,8 @@ class BaseDataset(Dataset):
             # Index of valid samples
             valid_samples = np.where(flag)[0]
 
-            # If we are working seq-seq and we want non-overlapping blocks we calculate their respective starting indices.
+            # If we are working seq-seq and we want non-overlapping blocks we calculate their respective starting
+            # indices.
             if self.cfg.unique_prediction_blocks:
                 block_id = np.arange(len(df_ts) // self.cfg.predict_last_n) * self.cfg.predict_last_n + (
                     self.cfg.predict_last_n - 1

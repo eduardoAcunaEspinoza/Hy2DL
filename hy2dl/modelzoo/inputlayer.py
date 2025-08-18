@@ -54,23 +54,27 @@ class InputLayer(nn.Module):
         self.emb_hc_x_d = nn.ModuleDict()
         if cfg.custom_seq_processing is None:
             self.emb_hc_x_d["x_d"] = (
-                InputLayer.build_ffnn(input_dim=len(cfg.dynamic_input),
-                                      spec=cfg.dynamic_embedding["hiddens"],
-                                      activation=cfg.dynamic_embedding["activation"],
-                                      dropout=cfg.dynamic_embedding["dropout"]
-                                      )
+                InputLayer.build_ffnn(
+                    input_dim=len(cfg.dynamic_input),
+                    spec=cfg.dynamic_embedding["hiddens"],
+                    activation=cfg.dynamic_embedding["activation"],
+                    dropout=cfg.dynamic_embedding["dropout"],
+                )
                 if isinstance(cfg.dynamic_embedding, dict)
                 else nn.Identity()
             )
 
-        elif isinstance(cfg.custom_seq_processing , dict):
+        elif isinstance(cfg.custom_seq_processing, dict):
             for k in cfg.custom_seq_processing:
                 self.emb_hc_x_d[f"x_d_{k}"] = (
-                    InputLayer.build_ffnn(input_dim=len(cfg.dynamic_input) if isinstance(cfg.dynamic_input, list) else len(cfg.dynamic_input[k]),
-                                          spec=cfg.dynamic_embedding["hiddens"],
-                                          activation=cfg.dynamic_embedding["activation"],
-                                          dropout=cfg.dynamic_embedding["dropout"]
-                                          )
+                    InputLayer.build_ffnn(
+                        input_dim=len(cfg.dynamic_input)
+                        if isinstance(cfg.dynamic_input, list)
+                        else len(cfg.dynamic_input[k]),
+                        spec=cfg.dynamic_embedding["hiddens"],
+                        activation=cfg.dynamic_embedding["activation"],
+                        dropout=cfg.dynamic_embedding["dropout"],
+                    )
                     if isinstance(cfg.dynamic_embedding, dict)
                     else nn.Identity()
                 )
@@ -78,12 +82,13 @@ class InputLayer(nn.Module):
         # static embeddings ---------------------
         if cfg.static_input:
             self.emb_x_s = (
-                InputLayer.build_ffnn(input_dim=len(cfg.static_input),
-                                      spec=cfg.static_embedding["hiddens"],
-                                      activation=cfg.static_embedding["activation"],
-                                      dropout=cfg.static_embedding["dropout"]
-                                     )
-               if isinstance(cfg.static_embedding, dict)
+                InputLayer.build_ffnn(
+                    input_dim=len(cfg.static_input),
+                    spec=cfg.static_embedding["hiddens"],
+                    activation=cfg.static_embedding["activation"],
+                    dropout=cfg.static_embedding["dropout"],
+                )
+                if isinstance(cfg.static_embedding, dict)
                 else nn.Identity()
             )
 
@@ -91,39 +96,41 @@ class InputLayer(nn.Module):
         if cfg.autoregressive_input:
             self.emb_hc_x_ar = nn.ModuleDict()
             if cfg.custom_seq_processing is None:
-                self.emb_hc_x_ar["x_ar"] = InputLayer.build_ffnn(input_dim=1,
-                                                                 spec=cfg.dynamic_embedding["hiddens"],
-                                                                 activation=cfg.dynamic_embedding["activation"],
-                                                                 dropout=cfg.dynamic_embedding["dropout"]
-                                                                 )
+                self.emb_hc_x_ar["x_ar"] = InputLayer.build_ffnn(
+                    input_dim=1,
+                    spec=cfg.dynamic_embedding["hiddens"],
+                    activation=cfg.dynamic_embedding["activation"],
+                    dropout=cfg.dynamic_embedding["dropout"],
+                )
 
-            elif isinstance(cfg.custom_seq_processing , dict):
+            elif isinstance(cfg.custom_seq_processing, dict):
                 for k in cfg.custom_seq_processing:
-                    self.emb_hc_x_ar[f"x_ar_{k}"] = InputLayer.build_ffnn(input_dim=1,
-                                                                          spec=cfg.dynamic_embedding["hiddens"],
-                                                                          activation=cfg.dynamic_embedding["activation"],
-                                                                          dropout=cfg.dynamic_embedding["dropout"]
-                                                                          )
+                    self.emb_hc_x_ar[f"x_ar_{k}"] = InputLayer.build_ffnn(
+                        input_dim=1,
+                        spec=cfg.dynamic_embedding["hiddens"],
+                        activation=cfg.dynamic_embedding["activation"],
+                        dropout=cfg.dynamic_embedding["dropout"],
+                    )
         # forecast embeddings ---------------------
         if cfg.forecast_input:
             self.emb_fc_x_d = (
-                InputLayer.build_ffnn(input_dim=len(cfg.forecast_input),
-                                      spec=cfg.dynamic_embedding["hiddens"],
-                                      activation=cfg.dynamic_embedding["activation"],
-                                      dropout=cfg.dynamic_embedding["dropout"]
-                                      )
+                InputLayer.build_ffnn(
+                    input_dim=len(cfg.forecast_input),
+                    spec=cfg.dynamic_embedding["hiddens"],
+                    activation=cfg.dynamic_embedding["activation"],
+                    dropout=cfg.dynamic_embedding["dropout"],
+                )
                 if isinstance(cfg.dynamic_embedding, dict)
                 else nn.Identity()
             )
-             
-            if cfg.autoregressive_input:
-                self.emb_fc_x_ar = InputLayer.build_ffnn(input_dim=1,
-                                                         spec=cfg.dynamic_embedding["hiddens"],
-                                                         activation=cfg.dynamic_embedding["activation"],
-                                                         dropout=cfg.dynamic_embedding["dropout"]
-                                                         )
-                                    
 
+            if cfg.autoregressive_input:
+                self.emb_fc_x_ar = InputLayer.build_ffnn(
+                    input_dim=1,
+                    spec=cfg.dynamic_embedding["hiddens"],
+                    activation=cfg.dynamic_embedding["activation"],
+                    dropout=cfg.dynamic_embedding["dropout"],
+                )
 
     @staticmethod
     def build_ffnn(input_dim: int, spec: List[int], activation: str = "relu", dropout: float = 0.0) -> nn.Sequential:
@@ -177,7 +184,7 @@ class InputLayer(nn.Module):
         """
 
         if not cfg.custom_seq_processing_flag:
-            return {"n_flags":0}
+            return {"n_flags": 0}
 
         # Flags during hindcast period
         flag_info = {}
@@ -187,7 +194,7 @@ class InputLayer(nn.Module):
         for k, v in enumerate(cfg.custom_seq_processing.values()):
             flag_hc[i : i + v["n_steps"], k] = 1
             i += v["n_steps"]
-        
+
         # If we only have two type of seq_processing, we only need one binary flag
         if len(cfg.custom_seq_processing) == 2:
             flag_hc = flag_hc[:, -1:]
@@ -197,11 +204,10 @@ class InputLayer(nn.Module):
 
         # Flag during forecast period
         if cfg.seq_length_forecast > 0:
-            flag_fc= flag_hc[-1, :].unsqueeze(0).repeat(cfg.seq_length_forecast, 1)
+            flag_fc = flag_hc[-1, :].unsqueeze(0).repeat(cfg.seq_length_forecast, 1)
             flag_info["flag_fc"] = flag_fc
-        
 
-        return flag_info 
+        return flag_info
 
     @staticmethod
     def _get_activation_function(activation: str) -> nn.Module:
@@ -242,21 +248,18 @@ class InputLayer(nn.Module):
             Dictionary with the different tensors processed by the embedding networks.
         """
         processed_sample = {}
-        
+
         # Hindcast period, dynamic inputs
         x_d = []
         for k, v in self.emb_hc_x_d.items():
             x_d.append(v(torch.stack(list(sample[k].values()), dim=-1)))
-            
+
         # Hindcast period, autoregressive inputs
         if self.cfg.autoregressive_input:
             x_ar = []
             for k, v in self.emb_hc_x_ar.items():
-                x_ar.append(
-                    v(torch.nan_to_num(sample[k], nan=0.0))
-                    .masked_fill(torch.isnan(sample[k]), float('nan'))
-                    )
-                
+                x_ar.append(v(torch.nan_to_num(sample[k], nan=0.0)).masked_fill(torch.isnan(sample[k]), float("nan")))
+
             # Masked-mean between dynamic and autoregressive inputs
             x_d = InputLayer.masked_mean_embedding(x_d, x_ar)
 
@@ -266,14 +269,13 @@ class InputLayer(nn.Module):
         # Static inputs if available
         if self.cfg.static_input:
             processed_sample["x_s"] = self.emb_x_s(sample["x_s"])
-        
+
         # Forecast period, dynamic inputs
         if self.cfg.forecast_input:
             processed_sample["x_d_fc"] = self.emb_fc_x_d(torch.stack(list(sample["x_d_fc"].values()), dim=-1))
 
         return processed_sample
 
-    
     def assemble_sample(self, sample: dict[str, torch.Tensor]) -> torch.Tensor:
         """Assembles the sample for the forward pass.
 
@@ -293,13 +295,15 @@ class InputLayer(nn.Module):
         # Add hindcast flags (if any)
         if self.flag_info.get("flag_hc") is not None:
             x_d = torch.cat([x_d, self.flag_info["flag_hc"].unsqueeze(0).expand(x_d.shape[0], -1, -1)], dim=2)
-        
+
         # Add forecast input (if any)
         if sample.get("x_d_fc") is not None:
             x_d_fc = sample["x_d_fc"]
             # Add forecast flags (if any)
             if self.flag_info.get("flag_fc") is not None:
-                x_d_fc = torch.cat([x_d_fc, self.flag_info["flag_fc"].unsqueeze(0).expand(x_d_fc.shape[0], -1, -1)], dim=2)
+                x_d_fc = torch.cat(
+                    [x_d_fc, self.flag_info["flag_fc"].unsqueeze(0).expand(x_d_fc.shape[0], -1, -1)], dim=2
+                )
 
             x_d = torch.cat([x_d, x_d_fc], dim=1)
 
@@ -308,7 +312,7 @@ class InputLayer(nn.Module):
             x_d = torch.cat([x_d, sample["x_s"].unsqueeze(1).expand(-1, x_d.shape[1], -1)], dim=2)
 
         return x_d
-    
+
     @staticmethod
     def masked_mean_embedding(*tensor_lists: List[torch.Tensor]) -> List[torch.Tensor]:
         """Computes the element-wise mean of the different tensors, masking NaN values.

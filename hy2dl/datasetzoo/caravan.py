@@ -30,8 +30,8 @@ class CARAVAN(BaseDataset):
 
     References
     ----------
-    .. [1] 1. Kratzert, F. et al. Caravan - A global community dataset for large-sample hydrology. Sci. Data 10, 61 (2023).
-            https://doi.org/10.1038/s41597-023-01975-w
+    .. [1] 1. Kratzert, F. et al. Caravan - A global community dataset for large-sample hydrology. Sci. Data 10, 61
+        (2023). https://doi.org/10.1038/s41597-023-01975-w
     .. [2] F. Kratzert, M. Gauch, G. Nearing and D. Klotz: NeuralHydrology -- A Python library for Deep Learning
         research in hydrology. Journal of Open Source Software, 7, 4050, doi: 10.21105/joss.04050, 2022
 
