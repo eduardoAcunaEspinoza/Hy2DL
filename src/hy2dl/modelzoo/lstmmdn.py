@@ -8,6 +8,7 @@ from hy2dl.modelzoo.inputlayer import InputLayer
 from hy2dl.utils.config import Config
 from hy2dl.utils.distributions import Distribution
 
+PI = torch.tensor(math.pi)
 
 class LSTMMDN(nn.Module):
     def __init__(self, cfg: Config):
@@ -163,7 +164,7 @@ class LSTMMDN(nn.Module):
                 loc, scale = params.values()
                 scale = torch.clamp(scale, min=1e-6)
                 p = (xi - loc) / scale
-                log_p = -0.5 * p.pow(2) - torch.log(scale) - 0.5 * torch.log(2 * math.pi)
+                log_p = -0.5 * p.pow(2) - torch.log(scale) - 0.5 * torch.log(2 * PI)
 
             case Distribution.LAPLACIAN:
                 loc, scale, kappa = params.values()
@@ -228,26 +229,24 @@ class LSTMMDN(nn.Module):
         out = []
         
         # Solve one quantile at a time
-        for qi in q:
-            # Mean as the initial guess
-            xi = self.mean(x)  # [B, N, T]
-            
-            for _ in range(max_iter):
-                pdf = self._calc_logpdf(x, xi).exp()   # [B, N, T]
-                cdf = self._calc_cdf(x, xi)            # [B, N, T]
+        with torch.no_grad():
+            for qi in q:
+                # Mean as the initial guess
+                xi = self.mean(x)  # [B, N, T]
                 
-                # Newton step
-                delta = (cdf - qi) / (pdf + 1e-12)     # [B, N, T]
-                new_xi = xi - delta
-                
-                # Convergence check
-                if delta.abs().max() < tol:
-                    xi = new_xi
-                    break
+                for _ in range(max_iter):
+                    pdf = self._calc_logpdf(x, xi).exp()   # [B, N, T]
+                    cdf = self._calc_cdf(x, xi)            # [B, N, T]
                     
-                xi = new_xi
-            
-            out.append(xi)
+                    # Newton step
+                    delta = (cdf - qi) / (pdf + 1e-12)     # [B, N, T]
+                    xi.sub_(delta) # Substract delta in-place
+                    
+                    # Convergence check
+                    if delta.abs().max() < tol:
+                        break
+                                        
+                out.append(xi.clone())
         
         # Stack quantiles → [B, N, Q, T]
         return torch.stack(out, dim=2)
