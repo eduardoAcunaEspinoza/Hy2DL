@@ -195,12 +195,12 @@ class LSTMMDN(nn.Module):
         x : torch.Tensor
             Input tensor [B, L, I].
         xi : torch.Tensor
-            Evaluation points [B, T, Q, D].
+            Evaluation points [B, N, T].
 
         Returns
         -------
         torch.Tensor
-            Mixture CDF values [B, N, Q, D].
+            Mixture CDF values [B, N, T].
         """
         xi = xi.unsqueeze(-2) # [B, N, 1, T]
 
@@ -223,3 +223,31 @@ class LSTMMDN(nn.Module):
         # Mix CDF (weighted mixture over components)
         cdf = (weights * cdf).sum(dim=-2)  # [B, N, T]
         return cdf
+    
+    def quantile(self, x, q: list[float], max_iter: int = 50, tol: float = 1e-6):
+        out = []
+        
+        # Solve one quantile at a time
+        for qi in q:
+            # Mean as the initial guess
+            xi = self.mean(x)  # [B, N, T]
+            
+            for _ in range(max_iter):
+                pdf = self._calc_logpdf(x, xi).exp()   # [B, N, T]
+                cdf = self._calc_cdf(x, xi)            # [B, N, T]
+                
+                # Newton step
+                delta = (cdf - qi) / (pdf + 1e-12)     # [B, N, T]
+                new_xi = xi - delta
+                
+                # Convergence check
+                if delta.abs().max() < tol:
+                    xi = new_xi
+                    break
+                    
+                xi = new_xi
+            
+            out.append(xi)
+        
+        # Stack quantiles → [B, N, Q, T]
+        return torch.stack(out, dim=2)
