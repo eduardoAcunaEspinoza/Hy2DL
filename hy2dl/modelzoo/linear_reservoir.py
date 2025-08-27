@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union
+from typing import Optional
 
 import torch
 
@@ -35,7 +35,7 @@ class linear_reservoir(BaseConceptualModel):
         x_conceptual: dict[str, torch.Tensor],
         parameters: dict[str, torch.Tensor],
         initial_states: Optional[dict[str, torch.Tensor]] = None,
-    ) -> dict[str, Union[torch.Tensor, dict[str, torch.Tensor]]]:
+    ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
         """Forward pass on the linear reservoir model
 
         Parameters
@@ -82,7 +82,10 @@ class linear_reservoir(BaseConceptualModel):
         # run hydrological model for each time step
         for j in range(seq_length):
             # Broadcast tensor to consider multiple conceptual models running in parallel
-            p = torch.tile(x_conceptual["precipitation"][:, j].unsqueeze(1), (1, self.n_conceptual_models))
+            p = torch.tile(
+                x_conceptual["precipitation"][:, j].unsqueeze(1),
+                (1, self.n_conceptual_models),
+            )
             et = torch.tile(x_conceptual["pet"][:, j].unsqueeze(1), (1, self.n_conceptual_models))
 
             # 1 bucket reservoir ------------------
@@ -101,7 +104,12 @@ class linear_reservoir(BaseConceptualModel):
         # last states
         final_states = self._get_final_states(states=states)
 
-        return {"y_hat": out, "parameters": parameters, "internal_states": states, "final_states": final_states}
+        return {
+            "y_hat": out,
+            "parameters": parameters,
+            "internal_states": states,
+            "final_states": final_states,
+        }
 
     @property
     def _initial_states(self) -> dict[str, float]:
@@ -110,5 +118,5 @@ class linear_reservoir(BaseConceptualModel):
         }
 
     @property
-    def parameter_ranges(self) -> dict[str, Tuple[float, float]]:
+    def parameter_ranges(self) -> dict[str, tuple[float, float]]:
         return {"ki": (0.002, 1.0), "aux_ET": (0.0, 1.5)}

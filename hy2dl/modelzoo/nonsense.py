@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union
+from typing import Optional
 
 import torch
 
@@ -36,7 +36,7 @@ class NonSense(BaseConceptualModel):
         x_conceptual: dict[str, torch.Tensor],
         parameters: dict[str, torch.Tensor],
         initial_states: Optional[dict[str, torch.Tensor]] = None,
-    ) -> dict[str, Union[torch.Tensor, dict[str, torch.Tensor]]]:
+    ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
         """Forward pass of the Nonsense model (conceptual model).
 
         Parameters
@@ -163,12 +163,23 @@ class NonSense(BaseConceptualModel):
         # Save last states
         final_states = self._get_final_states(states=states)
 
-        return {"y_hat": out, "parameters": parameters, "internal_states": states, "final_states": final_states}
+        return {
+            "y_hat": out,
+            "parameters": parameters,
+            "internal_states": states,
+            "final_states": final_states,
+        }
 
     @property
     def _initial_states(self) -> dict[str, float]:
         return {"ss": 0.0, "su": 5.0, "si": 10.0, "sb": 15.0}
 
     @property
-    def parameter_ranges(self) -> dict[str, Tuple[float, float]]:
-        return {"dd": (0.0, 10.0), "sumax": (20.0, 700.0), "beta": (1.0, 6.0), "ki": (1.0, 100.0), "kb": (10.0, 1000.0)}
+    def parameter_ranges(self) -> dict[str, tuple[float, float]]:
+        return {
+            "dd": (0.0, 10.0),
+            "sumax": (20.0, 700.0),
+            "beta": (1.0, 6.0),
+            "ki": (1.0, 100.0),
+            "kb": (10.0, 1000.0),
+        }

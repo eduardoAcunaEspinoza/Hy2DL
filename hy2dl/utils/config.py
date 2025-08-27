@@ -1,11 +1,12 @@
 import os
 import random
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Any, Optional
 
 import numpy as np
 import torch
 import yaml
+
 from hy2dl.utils.logging import get_logger
 
 
@@ -29,24 +30,20 @@ class Config(object):
         # read the config from a dictionary
         self._cfg = self._read_yaml(yml_path_or_dict)
 
+        # Create folder to store the results and initialize logger
+        self._create_folder()
+        self.logger = get_logger(self.path_save_folder)
+
         # Check if the config contains any unknown keys
         Config._check_cfg_keys(cfg=self._cfg)
 
-        # Check consistency in sequence length
+        # Check consistency of inputs
+        self._check_dynamic_inputs()
         self._check_seq_length()
-
-        # Check consistency in embeddings
         self._check_embeddings()
-
-        # Check device
-        self._device = Config._check_device(device=self._cfg.get("device", "cpu"))
+        self._check_nan_settings()
         self._check_num_workers()
-
-        # Create folder to save the results
-        self._create_folder()
-
-        # Initialize logger
-        self.logger = get_logger(self.path_save_folder)
+        self._device = Config._check_device(device=self._cfg.get("device", "cpu"))
 
     def dump(self) -> None:
         """Write the current configuration to a YAML file."""
@@ -60,21 +57,28 @@ class Config(object):
         with open(self.path_save_folder / "config.yml", "w") as file:
             yaml.dump(temp_cfg, file, default_flow_style=False, sort_keys=False)
 
+    def _check_dynamic_inputs(self):
+        if isinstance(self.dynamic_input, dict):
+            if self.custom_seq_processing is None and self.nan_handling_method is None:
+                raise ValueError("Groups of variables are only supported with a `nan_handling_method`")
+            elif self.custom_seq_processing is not None:
+                for v in self.dynamic_input.values():
+                    if isinstance(v, dict) and self.nan_handling_method is None:
+                        raise ValueError("Groups of variables are only supported with a `nan_handling_method`")
+
     def _check_embeddings(self):
         if isinstance(self.dynamic_input, dict) and self.dynamic_embedding is None:
             raise ValueError("`dynamic_input` as dictionary is only supported when `dynamic_embedding` is specified")
-
-        if self.autoregressive_input and self.dynamic_embedding is None:
-            raise ValueError("`autoregressive_input` is only supported if `dynamic_embedding` is specified")
 
         if self.static_input is None and self.static_embedding is not None:
             raise ValueError("`static_embedding` requires specification of `static_input`")
 
         if isinstance(self.dynamic_input, dict) and isinstance(self.custom_seq_processing, dict):
             if set(self.dynamic_input.keys()) != set(self.custom_seq_processing.keys()):
-                raise ValueError(
-                    "The dictionaries `dynamic_input` and `custom_seq_processing` must have the same keys."
-                )
+                raise ValueError("`dynamic_input` and `custom_seq_processing` must have the same keys.")
+
+        if isinstance(self.nan_handling_method, str) and self.dynamic_embedding is None:
+            raise ValueError("`dynamic_embedding` must be specified when using `nan_handling_method`")
 
         if (
             self.forecast_input
@@ -87,6 +91,35 @@ class Config(object):
                     "This is supported only if `dynamic_embedding` is specified"
                 )
             )
+
+    def _check_nan_settings(self):
+        """Check settings when working with nan handling methods"""
+        if self.nan_handling_method is not None:
+            if self.nan_handling_method not in ["masked_mean", "input_replacement"]:
+                raise ValueError(
+                    "Unknown `nan_handling_method`. Available options: ['masked_mean', 'input_replacement']"
+                )
+            if isinstance(self.nan_probability, dict):
+                nan_groups = list(self.nan_probability.keys())
+
+                input_groups = []
+                # One frequency, multiple groups
+                if self.custom_seq_processing is None and isinstance(self.dynamic_input, dict):
+                    input_groups.extend(k for k in self.dynamic_input)
+                # Multiple frequencies with groups. if I have multi-frequency the groups are defined in a nested dict.
+                elif isinstance(self.custom_seq_processing, dict) and isinstance(self.dynamic_input, dict):
+                    for v in self.dynamic_input.values():
+                        if isinstance(v, dict):
+                            input_groups.extend(k2 for k2 in v)
+                # Groups of forecast
+                if isinstance(self.forecast_input, dict):
+                    input_groups.extend(k for k in self.forecast_input)
+
+                if set(nan_groups) != set(input_groups):
+                    raise ValueError(
+                        "All groups contained in `dynamic_input` and `forecast_input` "
+                        "must be specified in `nan_probability`"
+                    )
 
     def _check_num_workers(self):
         """Checks if the number of workers that will be used in the dataloaders is valid."""
@@ -127,7 +160,7 @@ class Config(object):
         if not os.path.exists(self.path_save_folder / "model"):
             os.makedirs(self.path_save_folder / "model")
 
-    def _read_yaml(self, yml_path_or_dict: Union[str, dict]) -> dict:
+    def _read_yaml(self, yml_path_or_dict: str | dict) -> dict:
         """Read the configuration from a YAML file or a dictionary."""
         if isinstance(yml_path_or_dict, (Path, str)):
             with open(yml_path_or_dict, "r") as file:
@@ -203,10 +236,6 @@ class Config(object):
 
     # From this point forward, we define properties to access the configuration values.
     @property
-    def autoregressive_input(self) -> bool:
-        return self._cfg.get("autoregressive_input", False)
-
-    @property
     def batch_size_training(self) -> int:
         return self._cfg.get("batch_size_training")
 
@@ -215,7 +244,7 @@ class Config(object):
         return self._cfg.get("batch_size_evaluation", self.batch_size_training)
 
     @property
-    def conceptual_model(self) -> str:
+    def conceptual_model(self) -> Optional[str]:
         return self._cfg.get("conceptual_model")
 
     @property
@@ -224,7 +253,7 @@ class Config(object):
 
     @property
     def custom_seq_processing_flag(self) -> bool:
-        return self._cfg.get("custom_seq_processing_flag")
+        return self._cfg.get("custom_seq_processing_flag", False)
 
     @property
     def dataset(self) -> str:
@@ -239,21 +268,21 @@ class Config(object):
         return self._cfg.get("dropout_rate", 0.0)
 
     @property
-    def dynamic_input(self) -> Union[list[str], dict[str, list[str]]]:
+    def dynamic_embedding(self) -> Optional[dict[str, str | float | list[int]]]:
+        embedding = self._cfg.get("dynamic_embedding")
+        return None if embedding is None else Config._get_embedding_spec(embedding)
+
+    @property
+    def dynamic_input(self) -> list[str] | dict[str, list[str] | dict[str, list[str]]]:
         return self._cfg.get("dynamic_input")
 
     @property
-    def dynamic_input_conceptual_model(self) -> dict[str, str | list[str]]:
+    def dynamic_input_conceptual_model(self) -> Optional[dict[str, str | list[str]]]:
         return self._cfg.get("dynamic_input_conceptual_model")
 
     @property
-    def dynamic_parameterization_conceptual_model(self) -> List[str]:
+    def dynamic_parameterization_conceptual_model(self) -> list[str]:
         return Config._as_default_list(self._cfg.get("dynamic_parameterization_conceptual_model"))
-
-    @property
-    def dynamic_embedding(self) -> Optional[dict[str, Union[str, float, List[int]]]]:
-        embedding = self._cfg.get("dynamic_embedding")
-        return None if embedding is None else Config._get_embedding_spec(embedding)
 
     @property
     def epochs(self) -> int:
@@ -264,12 +293,12 @@ class Config(object):
         return self._cfg.get("experiment_name", "experiment_" + str(random.randint(0, 10_000)))
 
     @property
-    def forcings(self) -> List[str]:
+    def forcings(self) -> list[str]:
         return Config._as_default_list(self._cfg.get("forcings"))
 
     @property
-    def forecast_input(self) -> List[str]:
-        return Config._as_default_list(self._cfg.get("forecast_input"))
+    def forecast_input(self) -> list[str] | dict[str, list[str]]:
+        return self._cfg.get("forecast_input", [])
 
     @property
     def hidden_size(self) -> int:
@@ -280,7 +309,11 @@ class Config(object):
         return self._cfg.get("initial_forget_bias", None)
 
     @property
-    def learning_rate(self) -> Union[float, dict[str, float]]:
+    def lagged_features(self) -> Optional[dict[str, int | list[int]]]:
+        return self._cfg.get("lagged_features")
+
+    @property
+    def learning_rate(self) -> float | dict[str, float]:
         return self._cfg.get("learning_rate", 0.001)
 
     @property
@@ -292,12 +325,16 @@ class Config(object):
         return self._cfg.get("model")
 
     @property
-    def nan_sequence_probability(self) -> float:
-        return self._cfg.get("nan_sequence_probability", None)
+    def nan_handling_method(self) -> Optional[str]:
+        return self._cfg.get("nan_handling_method")
 
     @property
-    def nan_step_probability(self) -> float:
-        return self._cfg.get("nan_step_probability", None)
+    def nan_probability(self) -> Optional[dict[str, dict[str, float]]]:
+        return self._cfg.get("nan_probability")
+
+    @property
+    def nan_probabilistic_masking(self) -> bool:
+        return self._cfg.get("nan_probabilistic_masking", False)
 
     @property
     def num_conceptual_models(self) -> int:
@@ -309,33 +346,31 @@ class Config(object):
 
     @property
     def path_data(self) -> Path:
-        if self._cfg.get("path_data"):
-            return Path(self._cfg.get("path_data"))
-        else:
-            return None
+        path = self._cfg.get("path_data")
+        return Path(path) if path else None
 
     @property
-    def path_additional_features(self) -> Path:
+    def path_additional_features(self) -> Optional[Path]:
         path = self._cfg.get("path_additional_features")
         return Path(path) if path else None
 
     @property
-    def path_entities(self) -> Path:
+    def path_entities(self) -> Optional[Path]:
         path = self._cfg.get("path_entities")
         return Path(path) if path else None
 
     @property
-    def path_entities_testing(self) -> Path:
+    def path_entities_testing(self) -> Optional[Path]:
         path = self._cfg.get("path_entities_testing")
         return Path(path) if path else self.path_entities
 
     @property
-    def path_entities_training(self) -> Path:
+    def path_entities_training(self) -> Optional[Path]:
         path = self._cfg.get("path_entities_training")
         return Path(path) if path else self.path_entities
 
     @property
-    def path_entities_validation(self) -> Path:
+    def path_entities_validation(self) -> Optional[Path]:
         path = self._cfg.get("path_entities_validation")
         return Path(path) if path else self.path_entities
 
@@ -365,16 +400,16 @@ class Config(object):
         return self._cfg.get("random_seed", int(np.random.uniform(0, 1e6)))
 
     @property
-    def routing_model(self) -> str:
-        return self._cfg.get("routing_model", None)
+    def routing_model(self) -> Optional[str]:
+        return self._cfg.get("routing_model")
 
     @property
-    def static_embedding(self) -> Optional[dict[str, Union[str, float, List[int]]]]:
+    def static_embedding(self) -> Optional[dict[str, str | float | list[int]]]:
         embedding = self._cfg.get("static_embedding")
         return None if embedding is None else Config._get_embedding_spec(embedding)
 
     @property
-    def static_input(self) -> List[str]:
+    def static_input(self) -> list[str]:
         return Config._as_default_list(self._cfg.get("static_input"))
 
     @property
@@ -395,26 +430,26 @@ class Config(object):
 
     @property
     def steplr_step_size(self) -> Optional[int]:
-        return self._cfg.get("steplr_step_size", None)
+        return self._cfg.get("steplr_step_size")
 
     @property
     def steplr_gamma(self) -> Optional[float]:
-        return self._cfg.get("steplr_gamma", None)
+        return self._cfg.get("steplr_gamma")
 
     @property
-    def target(self) -> List[str]:
+    def target(self) -> list[str]:
         return Config._as_default_list(self._cfg.get("target"))
 
     @property
-    def teacher_forcing_scheduler(self) -> dict[str, float]:
-        return self._cfg.get("teacher_forcing_scheduler", None)
+    def teacher_forcing_scheduler(self) -> Optional[dict[str, float]]:
+        return self._cfg.get("teacher_forcing_scheduler")
 
     @property
-    def testing_period(self) -> List[str]:
+    def testing_period(self) -> list[str]:
         return self._cfg.get("testing_period")
 
     @property
-    def training_period(self) -> List[str]:
+    def training_period(self) -> list[str]:
         return self._cfg.get("training_period")
 
     @property
@@ -434,5 +469,5 @@ class Config(object):
         return self._cfg.get("validate_n_random_basins", 0)
 
     @property
-    def validation_period(self) -> List[str]:
+    def validation_period(self) -> list[str]:
         return self._cfg.get("validation_period")

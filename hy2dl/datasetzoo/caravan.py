@@ -1,5 +1,5 @@
 # import necessary packages
-from typing import List, Optional, Union
+from typing import Optional
 
 import pandas as pd
 
@@ -42,10 +42,15 @@ class CARAVAN(BaseDataset):
         cfg: Config,
         time_period: str,
         check_NaN: Optional[bool] = True,
-        entities_ids: Optional[Union[str, List[str]]] = None,
+        entities_ids: Optional[str | list[str]] = None,
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
-        super(CARAVAN, self).__init__(cfg=cfg, time_period=time_period, check_NaN=check_NaN, entities_ids=entities_ids)
+        super(CARAVAN, self).__init__(
+            cfg=cfg,
+            time_period=time_period,
+            check_NaN=check_NaN,
+            entities_ids=entities_ids,
+        )
 
     def _read_attributes(self) -> pd.DataFrame:
         """Read the catchments` attributes from Caravan

@@ -5,11 +5,11 @@ from hy2dl.modelzoo.inputlayer import InputLayer
 from hy2dl.utils.config import Config
 
 
-class CudaLSTM(nn.Module):
-    """LSTM model.
+class ForecastLSTM(nn.Module):
+    """Forecast model that uses single LSTM layer.
 
-    This class implements an LSTM layer followed by a linear head, which maps the
-    hidden states produced by the LSTM into predictions for the specified time steps.
+    This class implements a LSTM based forecast model, in which a single LSTM cell rolls out
+    through the hindcast and forecast period. Different embedding layers are used in each period.
 
     Parameters
     ----------
@@ -20,10 +20,13 @@ class CudaLSTM(nn.Module):
     def __init__(self, cfg: Config):
         super().__init__()
 
-        # Embedding network
+        # Embedding networks
         self.embedding_hindcast = InputLayer(cfg)
+        if cfg.forecast_input:
+            self.forecast_pred = True
+            self.embedding_forecast = InputLayer(cfg, embedding_type="forecast")
 
-        # Pytorch implementation of LSTM
+        # Cuda LSTM
         self.lstm = nn.LSTM(
             input_size=self.embedding_hindcast.output_size, hidden_size=cfg.hidden_size, batch_first=True
         )
@@ -55,6 +58,11 @@ class CudaLSTM(nn.Module):
         """
         # Preprocess data for hindcast period
         x_lstm = self.embedding_hindcast(sample)
+
+        # Preprocess data for forecast period (if any)
+        if self.forecast_pred:
+            x_fc = self.embedding_forecast(sample)
+            x_lstm = torch.cat((x_lstm, x_fc), dim=1)
 
         # Forward pass through the LSTM
         out, _ = self.lstm(x_lstm)

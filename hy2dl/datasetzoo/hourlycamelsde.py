@@ -1,5 +1,5 @@
 # import necessary packages
-from typing import List, Optional, Union
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -45,11 +45,14 @@ class Hourly_CAMELS_DE(CAMELS_DE):
         cfg: Config,
         time_period: str,
         check_NaN: Optional[bool] = True,
-        entities_ids: Optional[Union[str, List[str]]] = None,
+        entities_ids: Optional[str | list[str]] = None,
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
         super(Hourly_CAMELS_DE, self).__init__(
-            cfg=cfg, time_period=time_period, check_NaN=check_NaN, entities_ids=entities_ids
+            cfg=cfg,
+            time_period=time_period,
+            check_NaN=check_NaN,
+            entities_ids=entities_ids,
         )
 
     def _read_data(self, catch_id: str) -> pd.DataFrame:

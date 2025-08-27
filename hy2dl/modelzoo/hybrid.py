@@ -72,8 +72,7 @@ class Hybrid(nn.Module):
         """
 
         # Preprocess data to be sent to the LSTM
-        processed_sample = self.embedding_net(sample)
-        x_lstm = self.embedding_net.assemble_sample(processed_sample)
+        x_lstm = self.embedding_net(sample)
 
         # Forward pass through the LSTM
         lstm_output, _ = self.lstm(x_lstm)

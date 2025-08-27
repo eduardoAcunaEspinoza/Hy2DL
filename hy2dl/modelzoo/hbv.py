@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union
+from typing import Optional
 
 import torch
 
@@ -25,7 +25,7 @@ class HBV(BaseConceptualModel):
         Research, 58, e2022WR032404. https://doi.org/10.1029/2022WR032404
     .. [2] Seibert, J. (2005) HBV Light Version 2. User’s Manual. Department of Physical Geography and Quaternary
         Geology, Stockholm University, Stockholm
-    
+
     """
 
     def __init__(self, cfg: Config):
@@ -38,7 +38,7 @@ class HBV(BaseConceptualModel):
         x_conceptual: dict[str, torch.Tensor],
         parameters: dict[str, torch.Tensor],
         initial_states: Optional[dict[str, torch.Tensor]] = None,
-    ) -> dict[str, Union[torch.Tensor, dict[str, torch.Tensor]]]:
+    ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
         """Forward pass on the HBV model.
 
         Parameters
@@ -189,14 +189,25 @@ class HBV(BaseConceptualModel):
         # last states
         final_states = self._get_final_states(states=states)
 
-        return {"y_hat": out, "parameters": parameters, "internal_states": states, "final_states": final_states}
+        return {
+            "y_hat": out,
+            "parameters": parameters,
+            "internal_states": states,
+            "final_states": final_states,
+        }
 
     @property
     def _initial_states(self) -> dict[str, float]:
-        return {"SNOWPACK": 0.001, "MELTWATER": 0.001, "SM": 0.001, "SUZ": 0.001, "SLZ": 0.001}
+        return {
+            "SNOWPACK": 0.001,
+            "MELTWATER": 0.001,
+            "SM": 0.001,
+            "SUZ": 0.001,
+            "SLZ": 0.001,
+        }
 
     @property
-    def parameter_ranges(self) -> dict[str, Tuple[float, float]]:
+    def parameter_ranges(self) -> dict[str, tuple[float, float]]:
         return {
             "BETA": (1.0, 6.0),
             "FC": (50.0, 1000.0),
