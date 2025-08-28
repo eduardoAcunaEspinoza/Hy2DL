@@ -1,5 +1,5 @@
 # import necessary packages
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -49,11 +49,14 @@ class CAMELS_US(BaseDataset):
         cfg: Config,
         time_period: str,
         check_NaN: Optional[bool] = True,
-        entities_ids: Optional[Union[str, List[str]]] = None,
+        entities_ids: Optional[str | list[str]] = None,
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
         super(CAMELS_US, self).__init__(
-            cfg=cfg, time_period=time_period, check_NaN=check_NaN, entities_ids=entities_ids
+            cfg=cfg,
+            time_period=time_period,
+            check_NaN=check_NaN,
+            entities_ids=entities_ids,
         )
 
     def _read_attributes(self) -> pd.DataFrame:
@@ -156,7 +159,8 @@ class CAMELS_US(BaseDataset):
             # load the dataframe from the rest of the stream
             df = pd.read_csv(fp, sep=r"\s+")
             df["date"] = pd.to_datetime(
-                df.Year.map(str) + "/" + df.Mnth.map(str) + "/" + df.Day.map(str), format="%Y/%m/%d"
+                df.Year.map(str) + "/" + df.Mnth.map(str) + "/" + df.Day.map(str),
+                format="%Y/%m/%d",
             )
 
             df = df.set_index("date")
@@ -187,7 +191,8 @@ class CAMELS_US(BaseDataset):
         col_names = ["basin", "Year", "Mnth", "Day", "QObs", "flag"]
         df = pd.read_csv(file_path, sep=r"\s+", header=None, names=col_names)
         df["date"] = pd.to_datetime(
-            df.Year.map(str) + "/" + df.Mnth.map(str) + "/" + df.Day.map(str), format="%Y/%m/%d"
+            df.Year.map(str) + "/" + df.Mnth.map(str) + "/" + df.Day.map(str),
+            format="%Y/%m/%d",
         )
         df = df.set_index("date")
 

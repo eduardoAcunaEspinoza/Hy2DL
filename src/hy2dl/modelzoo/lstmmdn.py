@@ -28,15 +28,15 @@ class LSTMMDN(nn.Module):
             case Distribution.LAPLACIAN:
                 self.num_params = 3
 
-        self.fc_params = nn.Linear(cfg.hidden_size, self.num_params * cfg.num_components * cfg.output_features)
+        self.fc_params = nn.Linear(cfg.hidden_size, self.num_params * cfg.num_mixture_components * cfg.output_features)
 
         self.fc_weights = nn.Sequential(
-            nn.Linear(cfg.hidden_size, cfg.num_components * cfg.output_features),
-            nn.Unflatten(-1, (cfg.num_components, cfg.output_features)),
+            nn.Linear(cfg.hidden_size, cfg.num_mixture_components * cfg.output_features),
+            nn.Unflatten(-1, (cfg.num_mixture_components, cfg.output_features)),
             nn.Softmax(dim=-2)
         )
 
-        self.num_components = cfg.num_components
+        self.num_mixture_components = cfg.num_mixture_components
         self.predict_last_n = cfg.predict_last_n
 
         self.output_features = cfg.output_features
@@ -51,8 +51,7 @@ class LSTMMDN(nn.Module):
 
     def forward(self, sample):
         # Pre-process data to be sent to the LSTM
-        processed_sample = self.embedding_net(sample)
-        x_lstm = self.embedding_net.assemble_sample(processed_sample)
+        x_lstm = self.embedding_net(sample)
 
         # Forward pass through the LSTM
         out, _ = self.lstm(x_lstm)
@@ -75,7 +74,7 @@ class LSTMMDN(nn.Module):
                 scale = F.softplus(scale)
                 kappa = F.softplus(kappa)
                 params = {"loc": loc, "scale": scale, "kappa": kappa}
-        params = {k: v.reshape(v.shape[0], v.shape[1], self.num_components, self.output_features) for k, v in params.items()}
+        params = {k: v.reshape(v.shape[0], v.shape[1], self.num_mixture_components, self.output_features) for k, v in params.items()}
         
         return {"params": params, "weights": w}
     
@@ -121,7 +120,7 @@ class LSTMMDN(nn.Module):
         indices = indices.permute(0, 1, 3, 2)  # [B, N, S, T]
         indices = indices.unsqueeze(2)  # [B, N, 1, S, T]
 
-        # Now gather from the num_components dimension (dim=2)
+        # Now gather from the num_mixture_components dimension (dim=2)
         samples = torch.gather(samples, dim=2, index=indices)  # [B, N, 1, S, T]
         samples = samples.squeeze(2)  # [B, N, S, T]
 

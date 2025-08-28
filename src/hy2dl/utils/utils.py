@@ -2,6 +2,7 @@ import random
 
 import numpy as np
 import torch
+
 from hy2dl.utils.config import Config
 
 

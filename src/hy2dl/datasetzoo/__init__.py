@@ -5,7 +5,6 @@ from hy2dl.datasetzoo.camelsus import CAMELS_US
 from hy2dl.datasetzoo.caravan import CARAVAN
 from hy2dl.datasetzoo.hourlycamelsde import Hourly_CAMELS_DE
 from hy2dl.datasetzoo.hourlycamelsus import Hourly_CAMELS_US
-from hy2dl.datasetzoo.luxemburg import Luxemburg
 from hy2dl.utils.config import Config
 
 
@@ -36,8 +35,6 @@ def get_dataset(cfg: Config) -> BaseDataset:
         Dataset = Hourly_CAMELS_US
     elif cfg.dataset.lower() == "hourly_camels_de":
         Dataset = Hourly_CAMELS_DE
-    elif cfg.dataset.lower() == "luxemburg":
-        Dataset = Luxemburg
     else:
         raise NotImplementedError(f"No dataset class implemented for dataset {cfg.dataset}")
 

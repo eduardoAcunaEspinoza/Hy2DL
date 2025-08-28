@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import torch
 
 from hy2dl.modelzoo.baseconceptualmodel import BaseConceptualModel
@@ -31,7 +29,9 @@ class UH_routing(BaseConceptualModel):
         self.n_conceptual_models = 1
         self.parameter_type = self._map_parameter_type(cfg=cfg)
 
-    def forward(self, discharge: torch.Tensor, parameters: dict[str, torch.Tensor]) -> torch.Tensor:
+    def forward(
+        self, discharge: torch.Tensor, parameters: dict[str, torch.Tensor]
+    ) -> torch.Tensor:
         """Forward pass on the routing model
 
         Parameters
@@ -47,7 +47,11 @@ class UH_routing(BaseConceptualModel):
             Discharge series after applying the rouing module
 
         """
-        UH = self._gamma_routing(alpha=parameters["r_alpha"][:, 0, 0], beta=parameters["r_beta"][:, 0, 0], uh_len=15)
+        UH = self._gamma_routing(
+            alpha=parameters["r_alpha"][:, 0, 0],
+            beta=parameters["r_beta"][:, 0, 0],
+            uh_len=15,
+        )
         y_routed = self._uh_conv(discharge, UH)
         return y_routed
 
@@ -82,7 +86,9 @@ class UH_routing(BaseConceptualModel):
         uh = gamma_pdf / torch.sum(gamma_pdf, dim=0)
         return uh.unsqueeze(2)
 
-    def _uh_conv(self, discharge: torch.Tensor, unit_hydrograph: torch.Tensor) -> torch.Tensor:
+    def _uh_conv(
+        self, discharge: torch.Tensor, unit_hydrograph: torch.Tensor
+    ) -> torch.Tensor:
         """
         Convolution of discharge series and unit hydrograph.
 
@@ -111,7 +117,10 @@ class UH_routing(BaseConceptualModel):
 
         # Perform the convolution
         routed_discharge = torch.nn.functional.conv1d(
-            discharge, torch.flip(unit_hydrograph, [2]), groups=batch_size, padding=padding_size
+            discharge,
+            torch.flip(unit_hydrograph, [2]),
+            groups=batch_size,
+            padding=padding_size,
         )
         # Remove padding from the output
         routed_discharge = routed_discharge[:, :, :-padding_size]
@@ -119,5 +128,5 @@ class UH_routing(BaseConceptualModel):
         return routed_discharge.permute(1, 2, 0)  # Shape: (batch_size, timesteps, 1)
 
     @property
-    def parameter_ranges(self) -> dict[str, Tuple[float, float]]:
+    def parameter_ranges(self) -> dict[str, tuple[float, float]]:
         return {"r_alpha": (0.0, 2.9), "r_beta": (0.0, 6.5)}

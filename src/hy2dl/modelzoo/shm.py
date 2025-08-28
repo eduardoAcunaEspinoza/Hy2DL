@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union
+from typing import Optional
 
 import torch
 
@@ -38,7 +38,7 @@ class SHM(BaseConceptualModel):
         x_conceptual: dict[str, torch.Tensor],
         parameters: dict[str, torch.Tensor],
         initial_states: Optional[dict[str, torch.Tensor]] = None,
-    ) -> dict[str, Union[torch.Tensor, dict[str, torch.Tensor]]]:
+    ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
         """Forward pass on the SHM model.
 
         Parameters
@@ -73,7 +73,7 @@ class SHM(BaseConceptualModel):
         zero = torch.tensor(0.0, dtype=torch.float32, device=device)
         one = torch.tensor(1.0, dtype=torch.float32, device=device)
         klu = torch.tensor(0.90, dtype=torch.float32, device=device)  # land use correction factor [-]
-        
+
         # Reshape tensor to consider multiple conceptual models running in parallel
         precipitation = torch.tile(x_conceptual["precipitation"].unsqueeze(2), (1, 1, self.n_conceptual_models))
         temperature = torch.tile(x_conceptual["temperature"].unsqueeze(2), (1, 1, self.n_conceptual_models))
@@ -184,14 +184,19 @@ class SHM(BaseConceptualModel):
         # last states
         final_states = self._get_final_states(states=states)
 
-        return {"y_hat": out, "parameters": parameters, "internal_states": states, "final_states": final_states}
+        return {
+            "y_hat": out,
+            "parameters": parameters,
+            "internal_states": states,
+            "final_states": final_states,
+        }
 
     @property
     def _initial_states(self) -> dict[str, float]:
         return {"ss": 0.001, "sf": 0.001, "su": 0.001, "si": 0.001, "sb": 0.001}
 
     @property
-    def parameter_ranges(self) -> dict[str, Tuple[float, float]]:
+    def parameter_ranges(self) -> dict[str, tuple[float, float]]:
         return {
             "dd": (0.0, 10.0),
             "f_thr": (10.0, 60.0),

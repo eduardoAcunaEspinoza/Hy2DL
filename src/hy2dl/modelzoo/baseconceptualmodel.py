@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Union
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -9,8 +9,8 @@ from hy2dl.utils.config import Config
 class BaseConceptualModel(nn.Module):
     """Abstract base model class
 
-    Don't use this class for model training!The purpose is to have some common operations that all conceptual models
-    will need.
+    The purpose is to have some common operations that all conceptual models will need. Don't use this class for model
+    training!
 
     """
 
@@ -22,12 +22,12 @@ class BaseConceptualModel(nn.Module):
         x_conceptual: dict[str, torch.Tensor],
         parameters: dict[str, torch.Tensor],
         initial_states: Optional[dict[str, torch.Tensor]] = None,
-    ) -> dict[str, Union[torch.Tensor, dict[str, torch.Tensor]]]:
+    ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
         raise NotImplementedError
 
     def map_parameters(
         self, lstm_out: torch.Tensor, warmup_period: int
-    ) -> Tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         """Map output of data-driven part to predefined ranges of the conceptual model parameters.
 
         The result are two dictionaries, one contains the parameters for the warmup period of the conceptual model and
@@ -115,7 +115,7 @@ class BaseConceptualModel(nn.Module):
 
     def _initialize_information(
         self, conceptual_inputs: dict[str, torch.Tensor]
-    ) -> Tuple[dict[str, torch.Tensor], torch.Tensor]:
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         """Initialize structures to store the time evolution of the internal states and the outflow
 
         Parameters
@@ -138,7 +138,9 @@ class BaseConceptualModel(nn.Module):
         # initialize dictionary to store the evolution of the states
         for name in self._initial_states:
             states[name] = torch.zeros(
-                (batch_size, seq_length, self.n_conceptual_models), dtype=torch.float32, device=model_input.device
+                (batch_size, seq_length, self.n_conceptual_models),
+                dtype=torch.float32,
+                device=model_input.device,
             )
 
         # initialize vectors to store the evolution of the outputs
@@ -167,5 +169,5 @@ class BaseConceptualModel(nn.Module):
         raise NotImplementedError
 
     @property
-    def parameter_ranges(self) -> dict[str, List[float]]:
+    def parameter_ranges(self) -> dict[str, list[float]]:
         raise NotImplementedError

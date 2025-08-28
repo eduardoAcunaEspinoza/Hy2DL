@@ -92,7 +92,7 @@ def loss_nll(
     y_obs: torch.Tensor,
 ) -> torch.Tensor:
     
-    y = y_obs.unsqueeze(-2)  # [batch_size, sequence_length, 1, output_features]
+    y = y_obs.unsqueeze(-2)  # [B, L, 1, T]
 
     match dist:
         case Distribution.GAUSSIAN:
