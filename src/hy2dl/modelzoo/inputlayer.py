@@ -408,12 +408,12 @@ class InputLayer(nn.Module):
         dict[str, bool]
             Dictionary with boolean values indicating whether to drop each input group.
         """
-        nan_seq_probs = torch.tensor([v["nan_seq"] for v in self.cfg.nan_probability.values()])
-        drop_group = torch.rand(len(nan_seq_probs)) < nan_seq_probs
+        nan_seq_probs = torch.tensor([v["nan_seq"] for v in self.cfg.nan_probability.values()], device=self.cfg.device)
+        drop_group = torch.rand(len(nan_seq_probs), device=self.cfg.device) < nan_seq_probs
         if drop_group.all():  # Don't allow all sequences to be dropped out.
-            drop_group[torch.randint(0, drop_group.numel(), (1,))] = False
+            drop_group[torch.randint(0, drop_group.numel(), (1,), device=self.cfg.device)] = False
 
-        return dict(zip(self.cfg.nan_probability.keys(), drop_group.to(dtype=torch.bool, device=self.cfg.device)))
+        return dict(zip(self.cfg.nan_probability.keys(), drop_group, strict=True))
 
     @staticmethod
     def build_embedding(input_dim: int, embedding: Optional[dict[str, str | float | list[int]]]):
