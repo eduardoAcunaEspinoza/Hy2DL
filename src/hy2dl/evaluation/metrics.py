@@ -2,6 +2,7 @@ from typing import Dict
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 
 
 def nse(df_results: Dict[str, pd.DataFrame], average: bool = True) -> np.array:
@@ -157,3 +158,8 @@ def forecast_PNSE(results: Dict[str, pd.DataFrame], filter: Dict[str, pd.DataFra
     df_loss.index.name = "gauge_id"
 
     return df_loss
+
+def calc_nse(y_obs: xr.DataArray, y_hat: xr.DataArray) -> float:
+    num = ((y_hat - y_obs) ** 2).sum(skipna=True)
+    dem = ((y_obs - y_obs.mean(skipna=True)) ** 2).sum(skipna=True)
+    return float(1 - num / dem)
