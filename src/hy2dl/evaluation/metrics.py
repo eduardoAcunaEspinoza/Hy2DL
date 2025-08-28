@@ -156,11 +156,3 @@ def forecast_PNSE(results: dict[str, pd.DataFrame], filter: dict[str, pd.DataFra
     df_loss.index.name = "gauge_id"
 
     return df_loss
-<<<<<<< HEAD
-
-def calc_nse(y_obs: xr.DataArray, y_hat: xr.DataArray) -> float:
-    num = ((y_hat - y_obs) ** 2).sum(skipna=True)
-    dem = ((y_obs - y_obs.mean(skipna=True)) ** 2).sum(skipna=True)
-    return float(1 - num / dem)
-=======
->>>>>>> epo4hydro
