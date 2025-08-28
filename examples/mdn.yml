@@ -1,0 +1,74 @@
+experiment_name: LSTMGMM-250-01_NLL-GAUSSIAN_S05_531
+path_save_folder: results/LSTMGMM-250-01_NLL-GAUSSIAN_S05_531
+path_data: ../CAMELS-US
+path_entities: data/basin_id/basins_camels_us_531.txt
+dynamic_input:
+- prcp(mm/day)_daymet
+- PRCP(mm/day)_nldas
+- PRCP(mm/day)_maurer
+- srad(W/m2)_daymet
+- tmax(C)_daymet
+- tmin(C)_daymet
+- vp(Pa)_daymet
+target:
+- QObs(mm/d)
+forcings:
+- daymet
+- nldas
+- maurer
+static_input:
+- elev_mean
+- slope_mean
+- area_gages2
+- frac_forest
+- lai_max
+- lai_diff
+- gvf_max
+- gvf_diff
+- soil_depth_pelletier
+- soil_depth_statsgo
+- soil_porosity
+- soil_conductivity
+- max_water_content
+- sand_frac
+- silt_frac
+- clay_frac
+- carbonate_rocks_frac
+- geol_permeability
+- p_mean
+- pet_mean
+- p_seasonality
+- aridity
+- frac_snow
+- high_prec_freq
+- high_prec_dur
+- low_prec_freq
+- low_prec_dur
+training_period:
+- '1999-10-01'
+- '2008-09-30'
+validation_period:
+- '1980-10-01'
+- '1989-09-30'
+testing_period:
+- '1989-10-01'
+- '1999-10-30'
+seq_length: 365
+batch_size_training: 256
+batch_size_evaluation: 1024
+epochs: 10
+dropout_rate: 0.4
+initial_forget_bias: 3.0
+learning_rate:
+  1: 0.001
+validate_every: 1
+validate_n_random_basins: -1
+device: gpu
+num_workers: 4
+random_seed: 5
+dataset: camels_us
+predict_last_n: 1
+model: lstmmdn
+num_components: 1
+distribution: gaussian
+hidden_size: 250
