@@ -7,7 +7,6 @@ license = {text = "LICENSE"}
 
 authors = [
     {name = "Eduardo Acuña Espinoza", email = "eduardo.espinoza@kit.edu"},
-    {name = "Ralf Loritz", email = "ralf.loritz@kit.edu"},
     {name = "Manuel Álvarez Chaves", email = "manuel.alvarez-chaves@simtech.uni-stuttgart.de"}
 ]
 
@@ -31,3 +30,14 @@ dev = [
 [build-system]
 requires = ["uv_build>=0.8.9,<0.9.0"]
 build-backend = "uv_build"
+
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.format]
+docstring-code-format = true
+docstring-code-line-length = 120
+
+[tool.ruff.lint]
+extend-select = ["B", "E501", "I", "Q"]
