@@ -1,5 +1,7 @@
 import torch
 
+from hy2dl.utils.distributions import Distribution
+
 
 def nse_basin_averaged(y_sim: torch.tensor, y_obs: torch.tensor, per_basin_target_std: torch.tensor) -> torch.Tensor:
     """Basin-averaged Nash--Sutcliffe Efficiency.
@@ -80,3 +82,39 @@ def weighted_rmse(y_sim: torch.tensor, y_obs: torch.tensor) -> torch.Tensor:
     )
 
     return loss
+
+def loss_nll(
+    params: dict[str, torch.Tensor],
+    weights: torch.Tensor,
+    dist: Distribution,
+    y_obs: torch.Tensor,
+) -> torch.Tensor:
+    
+    y = y_obs.unsqueeze(-2)  # [B, L, 1, T]
+
+    match dist:
+        case Distribution.GAUSSIAN:
+            loc, scale = params.values()
+            scale = torch.clamp(scale, min=1e-6)
+            p = (y - loc) / scale
+            log_p = -0.5 * p.pow(2) - torch.log(scale) - 0.5 * torch.log(torch.tensor(2 * math.pi))
+
+        case Distribution.LAPLACIAN:
+            loc, scale, kappa = params.values()
+            scale = torch.clamp(scale, min=1e-6)
+            kappa = torch.clamp(kappa, min=1e-6)
+
+            p = (y - loc) / scale
+
+            mask = (p >= 0)
+
+            log_p = torch.zeros_like(p)
+
+            log_p[mask] = -1 * p[mask] * kappa[mask]
+            log_p[~mask] = p[~mask] / kappa[~mask]
+
+            log_p = log_p - torch.log(kappa + 1 / kappa) - torch.log(scale)
+
+    log_w = torch.log(torch.clamp(weights, min=1e-10))
+    loss = -torch.logsumexp(log_p + log_w, dim=1)
+    return loss.mean(dim=(0, 1))

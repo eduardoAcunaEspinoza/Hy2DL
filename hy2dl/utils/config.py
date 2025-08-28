@@ -26,16 +26,17 @@ class Config(object):
         research in hydrology. Journal of Open Source Software, 7, 4050, doi: 10.21105/joss.04050, 2022
     """
 
-    def __init__(self, yml_path_or_dict: dict):
+    def __init__(self, yml_path_or_dict: dict, dev_mode: bool = False):
         # read the config from a dictionary
         self._cfg = self._read_yaml(yml_path_or_dict)
+        
+        # Check if the config contains any unknown keys
+        if not dev_mode:
+            Config._check_cfg_keys(cfg=self._cfg)
 
         # Create folder to store the results and initialize logger
         self._create_folder()
         self.logger = get_logger(self.path_save_folder)
-
-        # Check if the config contains any unknown keys
-        Config._check_cfg_keys(cfg=self._cfg)
 
         # Check consistency of inputs
         self._check_dynamic_inputs()
@@ -262,6 +263,10 @@ class Config(object):
     @property
     def device(self) -> str:
         return self._device
+        
+    @property
+    def distribution(self) -> str:
+        return self._cfg.get("distribution")
 
     @property
     def dropout_rate(self) -> float:
@@ -335,6 +340,10 @@ class Config(object):
     @property
     def nan_probabilistic_masking(self) -> bool:
         return self._cfg.get("nan_probabilistic_masking", False)
+
+    @property
+    def num_mixture_components(self) -> int:
+        return self._cfg.get("num_mixture_components")
 
     @property
     def num_conceptual_models(self) -> int:
