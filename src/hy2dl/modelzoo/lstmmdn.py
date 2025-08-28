@@ -227,9 +227,8 @@ class LSTMMDN(nn.Module):
     
     def quantile(self, x, q: list[float], max_iter: int = 50, tol: float = 1e-6):
         out = []
-        
-        # Solve one quantile at a time
         with torch.no_grad():
+            # Solve one quantile at a time
             for qi in q:
                 # Mean as the initial guess
                 xi = self.mean(x)  # [B, N, T]
@@ -248,5 +247,5 @@ class LSTMMDN(nn.Module):
                                         
                 out.append(xi.clone())
         
-        # Stack quantiles → [B, N, Q, T]
+        # Stack quantiles -> [B, N, Q, T]
         return torch.stack(out, dim=2)
