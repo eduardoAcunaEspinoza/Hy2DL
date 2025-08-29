@@ -1,3 +1,5 @@
+import math
+
 import torch
 
 from hy2dl.utils.distributions import Distribution
@@ -83,13 +85,13 @@ def weighted_rmse(y_sim: torch.tensor, y_obs: torch.tensor) -> torch.Tensor:
 
     return loss
 
+
 def loss_nll(
     params: dict[str, torch.Tensor],
     weights: torch.Tensor,
     dist: Distribution,
     y_obs: torch.Tensor,
 ) -> torch.Tensor:
-    
     y = y_obs.unsqueeze(-2)  # [B, L, 1, T]
 
     match dist:
@@ -106,7 +108,7 @@ def loss_nll(
 
             p = (y - loc) / scale
 
-            mask = (p >= 0)
+            mask = p >= 0
 
             log_p = torch.zeros_like(p)
 
