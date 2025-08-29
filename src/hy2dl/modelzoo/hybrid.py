@@ -3,6 +3,7 @@ import torch.nn as nn
 
 # Conceptual models
 from hy2dl.modelzoo.baseconceptualmodel import BaseConceptualModel
+from hy2dl.modelzoo.custom_reservoir import custom_reservoir
 from hy2dl.modelzoo.hbv import HBV
 from hy2dl.modelzoo.inputlayer import InputLayer
 from hy2dl.modelzoo.linear_reservoir import linear_reservoir
@@ -132,6 +133,8 @@ def _get_conceptual_model(cfg: Config) -> BaseConceptualModel:
         model = NonSense(cfg=cfg)
     elif cfg.conceptual_model.lower() == "shm":
         model = SHM(cfg=cfg)
+    elif cfg.conceptual_model.lower() == "custom_reservoir":
+        model = custom_reservoir(cfg=cfg)
     else:
         raise NotImplementedError(f"{cfg.model} not implemented or not linked in `get_conceptual_model()`")
 
