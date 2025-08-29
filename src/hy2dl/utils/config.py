@@ -29,14 +29,10 @@ class Config(object):
     def __init__(self, yml_path_or_dict: dict, dev_mode: bool = False):
         # read the config from a dictionary
         self._cfg = self._read_yaml(yml_path_or_dict)
-        
+
         # Check if the config contains any unknown keys
         if not dev_mode:
             Config._check_cfg_keys(cfg=self._cfg)
-
-        # Create folder to store the results and initialize logger
-        self._create_folder()
-        self.logger = get_logger(self.path_save_folder)
 
         # Check consistency of inputs
         self._check_dynamic_inputs()
@@ -45,6 +41,12 @@ class Config(object):
         self._check_nan_settings()
         self._check_num_workers()
         self._device = Config._check_device(device=self._cfg.get("device", "cpu"))
+
+    def init_experiment(self):
+        """Create folder structure and get the logger where the experiment progress will be reported"""
+        # Create folder to store the results and initialize logger
+        self._create_folder()
+        self.logger = get_logger(self.path_save_folder)
 
     def dump(self) -> None:
         """Write the current configuration to a YAML file."""
@@ -263,7 +265,7 @@ class Config(object):
     @property
     def device(self) -> str:
         return self._device
-        
+
     @property
     def distribution(self) -> str:
         return self._cfg.get("distribution")
@@ -407,6 +409,10 @@ class Config(object):
     @property
     def random_seed(self) -> int:
         return self._cfg.get("random_seed", int(np.random.uniform(0, 1e6)))
+
+    @random_seed.setter
+    def random_seed(self, value: int):
+        self._cfg["random_seed"] = value
 
     @property
     def routing_model(self) -> Optional[str]:
