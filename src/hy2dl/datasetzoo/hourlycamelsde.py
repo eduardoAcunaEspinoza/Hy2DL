@@ -16,7 +16,7 @@ class Hourly_CAMELS_DE(CAMELS_DE):
      code the _read_attributes and _read_data methods, that specify how we should read the information from CAMELS DE.
 
     Parameters
-     ----------
+    ----------
      cfg : Config
          Configuration file.
      time_period : {'training', 'validation', 'testing'}
@@ -26,17 +26,6 @@ class Hourly_CAMELS_DE(CAMELS_DE):
          and can be set to False during evaluation (validation/testing).
      entity : Optional[str], default=None
          ID of the entity (e.g., single catchment's ID) to be analyzed
-
-     References
-     ----------
-     .. [1] Loritz, R., Dolich, A., Acuña Espinoza, E., Ebeling, P., Guse, B., Götte, J., Hassler, S. K., Hauffe,
-         C., Heidbüchel, I., Kiesel, J., Mälicke, M., Müller-Thomy, H., Stölzle, M., & Tarasova, L. (2024).
-         CAMELS-DE: Hydro-meteorological time series and attributes for 1555 catchments in Germany.
-         Earth System Science Data Discussions, 2024, 1–30. https://doi.org/10.5194/essd-2024-318
-     .. [2] Dolich, A., Espinoza, E. A., Ebeling, P., Guse, B., Götte, J., Hassler, S., Hauffe, C., Kiesel, J.,
-         Heidbüchel, I., Mälicke, M., Müller-Thomy, H., Stölzle, M., Tarasova, L., & Loritz, R. (2024).
-         CAMELS-DE: hydrometeorological time series and attributes for 1582 catchments in Germany (1.0.0) [Data set].
-         Zenodo. https://doi.org/10.5281/zenodo.13837553
 
     """
 

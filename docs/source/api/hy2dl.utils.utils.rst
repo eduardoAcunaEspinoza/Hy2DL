@@ -1,7 +1,7 @@
-MFLSTM
-=======
+Utilities
+==========
 
-.. automodule:: hy2dl.modelzoo.mflstm
+.. automodule:: hy2dl.utils.utils
    :members:
    :undoc-members:
    :show-inheritance:

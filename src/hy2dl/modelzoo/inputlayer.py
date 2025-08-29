@@ -84,6 +84,7 @@ class InputLayer(nn.Module):
         _sample: torch.Tensor | dict[str, torch.Tensor]
             Either the processed tensor or a dictionary with the different tensors that then have the be assembled
             manually
+
         """
         _sample = {}
 
@@ -147,6 +148,7 @@ class InputLayer(nn.Module):
         flag_info : dict[str, torch.Tensor]
             Dictionary containing the flag channels and their size.
             If no custom sequence processing is defined, returns a dictionary with n_flags = 0.
+
         """
 
         if not cfg.custom_seq_processing_flag:
@@ -177,7 +179,9 @@ class InputLayer(nn.Module):
         ----------
         cfg : Config
             Configuration file.
+
         """
+
         # -------------------------
         # Embeddings for dynamic variables
         # -------------------------
@@ -275,6 +279,7 @@ class InputLayer(nn.Module):
         ----------
         .. [#] M. Gauch, F. Kratzert, D. Klotz, G. Nearing, D. Cohen and o. Gilon : How to deal w___ missing input data
             research in hydrology. EGUsphere, 1, 21, doi: 10.5194/egusphere-2025-1224, 2025
+
         """
 
         x_d = []
@@ -342,6 +347,7 @@ class InputLayer(nn.Module):
         ----------
         .. [#] M. Gauch, F. Kratzert, D. Klotz, G. Nearing, D. Cohen and o. Gilon : How to deal w___ missing input data
             research in hydrology. EGUsphere, 1, 21, doi: 10.5194/egusphere-2025-1224, 2025
+
         """
 
         # Process dynamic inputs ---
@@ -407,7 +413,9 @@ class InputLayer(nn.Module):
         -------
         dict[str, bool]
             Dictionary with boolean values indicating whether to drop each input group.
+
         """
+
         nan_seq_probs = torch.tensor([v["nan_seq"] for v in self.cfg.nan_probability.values()], device=self.cfg.device)
         drop_group = torch.rand(len(nan_seq_probs), device=self.cfg.device) < nan_seq_probs
         if drop_group.all():  # Don't allow all sequences to be dropped out.
@@ -419,7 +427,7 @@ class InputLayer(nn.Module):
     def build_embedding(input_dim: int, embedding: Optional[dict[str, str | float | list[int]]]):
         """Build embedding
 
-         Parameters
+        Parameters
         ----------
         input_dim: int
             Input dimension of the first layer.
@@ -430,6 +438,7 @@ class InputLayer(nn.Module):
         -------
         nn.Sequential | nn.Identity
             Embedding network or nn.Identity
+
         """
 
         return (
@@ -464,7 +473,9 @@ class InputLayer(nn.Module):
         -------
         nn.Sequential
             A sequential model containing the feedforward neural network layers.
+
         """
+
         activation = InputLayer._get_activation_function(activation)
         ffnn_layers = []
         for i, out_dim in enumerate(spec):
@@ -491,7 +502,9 @@ class InputLayer(nn.Module):
         -------
         nn.Module
             The corresponding activation function module.
+
         """
+
         if activation.lower() == "relu":
             return nn.ReLU()
         elif activation == "linear":

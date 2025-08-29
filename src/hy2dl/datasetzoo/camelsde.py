@@ -10,7 +10,7 @@ from hy2dl.utils.config import Config
 class CAMELS_DE(BaseDataset):
     """
     Class to process data from [version 1.0.0 of the CAMELS Germany dataset]
-    (https://doi.org/10.5281/zenodo.13837553) by [1]_, [2]_ .
+    (https://doi.org/10.5281/zenodo.13837553) by [1]_ [2]_ .
 
     The class inherits from BaseDataset to execute the operations on how to load and process the data. However here we
     code the _read_attributes and _read_data methods, that specify how we should read the information from CAMELS DE.

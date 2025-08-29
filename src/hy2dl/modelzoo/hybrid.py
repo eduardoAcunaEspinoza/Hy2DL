@@ -122,6 +122,7 @@ def _get_conceptual_model(cfg: Config) -> BaseConceptualModel:
     -------
     BaseConceptualModel
         A new conceptual model instance of the type specified in the config.
+
     """
     if cfg.conceptual_model.lower() == "hbv":
         model = HBV(cfg=cfg)
@@ -149,6 +150,7 @@ def _get_routing_model(cfg: Config) -> BaseConceptualModel:
     -------
     BaseConceptualModel
         A new conceptual model instance of the type specified in the config.
+
     """
     if cfg.routing_model.lower() == "uh_routing":
         model = UH_routing(cfg=cfg)

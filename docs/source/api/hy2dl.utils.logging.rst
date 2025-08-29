@@ -1,7 +1,7 @@
-utils
-======
+Logger
+=======
 
-.. automodule:: hy2dl.aux_functions.utils
+.. automodule:: hy2dl.utils.logging
    :members:
    :undoc-members:
    :show-inheritance:

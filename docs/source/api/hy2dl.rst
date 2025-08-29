@@ -10,7 +10,9 @@ Hy2DL API
 .. toctree::
    :maxdepth: 4
 
-   hy2dl.aux_functions
    hy2dl.datasetzoo
+   hy2dl.evaluation
    hy2dl.modelzoo
+   hy2dl.training
+   hy2dl.utils
 
