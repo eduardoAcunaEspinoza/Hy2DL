@@ -75,10 +75,10 @@ class Hybrid(nn.Module):
         x_lstm = self.embedding_net(sample)
 
         # Forward pass through the LSTM
-        lstm_output, _ = self.lstm(x_lstm)
+        hs, _ = self.lstm(x_lstm)
 
         # map lstm outputs to the dimension of the conceptual model´s parameters
-        lstm_output = self.linear(lstm_output)
+        lstm_output = self.linear(hs)
 
         # map lstm output to parameters of conceptual model
         warmup_period = self.cfg.seq_length - self.cfg.predict_last_n
@@ -107,6 +107,7 @@ class Hybrid(nn.Module):
             # apply routing routine
             pred["y_hat"] = self.routing_model(discharge=pred["y_hat"], parameters=parameters_simulation)
 
+        pred["hs"] = hs[:, -self.cfg.predict_last_n :, :]
         return pred
 
 

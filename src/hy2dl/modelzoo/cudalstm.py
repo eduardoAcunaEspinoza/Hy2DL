@@ -57,11 +57,11 @@ class CudaLSTM(nn.Module):
         x_lstm = self.embedding_hindcast(sample)
 
         # Forward pass through the LSTM
-        out, _ = self.lstm(x_lstm)
+        hs, _ = self.lstm(x_lstm)
         # Extract sequence of interest
-        out = out[:, -self.predict_last_n :, :]
-        out = self.dropout(out)
+        hs = hs[:, -self.predict_last_n :, :]
+        out = self.dropout(hs)
         # Transform the output to the desired shape using a linear layer
         out = self.linear(out)
 
-        return {"y_hat": out}
+        return {"y_hat": out, "hs": hs}
