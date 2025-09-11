@@ -22,11 +22,9 @@ class ForecastLSTM(nn.Module):
 
         # Embedding networks
         self.embedding_hindcast = InputLayer(cfg)
-        if cfg.forecast_input:
-            self.forecast_pred = True
-            self.embedding_forecast = InputLayer(cfg, embedding_type="forecast")
+        self.embedding_forecast = InputLayer(cfg, embedding_type="forecast")
 
-        # Cuda LSTM
+        # LSTM
         self.lstm = nn.LSTM(
             input_size=self.embedding_hindcast.output_size, hidden_size=cfg.hidden_size, batch_first=True
         )
@@ -59,10 +57,11 @@ class ForecastLSTM(nn.Module):
         # Preprocess data for hindcast period
         x_lstm = self.embedding_hindcast(sample)
 
-        # Preprocess data for forecast period (if any)
-        if self.forecast_pred:
-            x_fc = self.embedding_forecast(sample)
-            x_lstm = torch.cat((x_lstm, x_fc), dim=1)
+        # Preprocess data for forecast period
+        x_fc = self.embedding_forecast(sample)
+
+        # Concatenate both periods along the sequence dimension
+        x_lstm = torch.cat((x_lstm, x_fc), dim=1)
 
         # Forward pass through the LSTM
         out, _ = self.lstm(x_lstm)

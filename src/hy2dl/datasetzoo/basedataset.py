@@ -379,6 +379,7 @@ class BaseDataset(Dataset):
                 zip(
                     self.df_attributes.columns,
                     torch.tensor(self.df_attributes.std().values, dtype=torch.float32),
+                    strict=True,
                 )
             )
 
@@ -562,24 +563,37 @@ class BaseDataset(Dataset):
                 mask = ~np.any(np.isnan(x_slide_view), axis=(2, 3)).flatten()
                 flag[self.cfg.seq_length_hindcast - 1 :] &= mask
 
-            # Case 2: If we have multiple groups of variables, but use the same groups along the whole sequence
-            # length, all the groups need to have NaN  elements in the same point to make the sample invalid.
-            # Example:
-            # - We have multiple group of variables but have single frequency data
+            # Case 2: If we have multiple groups of variables, and use the same groups along the whole sequence.
+            # Example: We have multiple group of variables but have single frequency data.
+            # The sample is invalid if:
+            # - all the groups have NaN elements in the same point
+            # - a "mandatory group" have NaN elements. A mandatory group is a group that according to the
+            # ´nan_probability´ configuration argument have a nan_seq = 0
             elif isinstance(self.cfg.dynamic_input, dict) and self.cfg.custom_seq_processing is None:
-                group_masks = []
+                mask_groups = None
+                mask_mandatory_groups = None
                 # Check for each group
-                for v in self.cfg.dynamic_input.values():
-                    x = df_ts[v].values
+                for group_name, group_var in self.cfg.dynamic_input.items():
+                    x = df_ts[group_var].values
                     x_slide_view = sliding_window_view(x, (self.cfg.seq_length_hindcast, x.shape[1]))
-                    group_masks.append(~np.any(np.isnan(x_slide_view), axis=(2, 3)).flatten())
-                # I get an invalid sample if all groups are invalid
-                mask = np.any(group_masks, axis=0)
+                    g_mask = ~np.any(np.isnan(x_slide_view), axis=(2, 3)).flatten()
+
+                    # The mask is True if there is at least one valid group (logical OR -> |)
+                    mask_groups = g_mask if mask_groups is None else mask_groups | g_mask
+
+                    # Mandatory groups
+                    if self.cfg.nan_probability is not None and self.cfg.nan_probability[group_name]["nan_seq"] == 0:
+                        # The mask is True if all mandatory groups are True (logical AND -> &)
+                        mask_mandatory_groups = (
+                            g_mask if mask_mandatory_groups is None else mask_mandatory_groups & g_mask
+                        )
+
+                # Final mask: least one group valid AND all mandatory groups valid
+                mask = mask_groups if mask_mandatory_groups is None else mask_groups & mask_mandatory_groups
                 flag[self.cfg.seq_length_hindcast - 1 :] &= mask
 
             # Case 3: If we use the different variables (or group of variables) along the sequence length.
-            # Example:
-            # - We have multi-frequency approaches and the variables change along the sequence.
+            # Example: We have multi-frequency approaches and the variables change along the sequence.
             elif isinstance(self.cfg.dynamic_input, dict) and isinstance(self.cfg.custom_seq_processing, dict):
                 aux_index = 0  # start of sequence subset
                 for k, v in self.cfg.custom_seq_processing.items():
@@ -592,17 +606,33 @@ class BaseDataset(Dataset):
 
                     # If we have multiple groups of variables for each frequency
                     elif isinstance(self.cfg.dynamic_input[k], dict):
-                        group_masks = []
-                        for group in self.cfg.dynamic_input[k].values():
-                            x = df_ts[group].values
+                        mask_groups = None
+                        mask_mandatory_groups = None
+                        for group_name, group_var in self.cfg.dynamic_input[k].items():
+                            x = df_ts[group_var].values
                             x_slide_view = sliding_window_view(x, (self.cfg.seq_length_hindcast, x.shape[1]))
                             x_freq_subset = x_slide_view[
                                 :,
                                 :,
                                 aux_index : aux_index + (v["n_steps"] * v["freq_factor"]),
                             ]
-                            group_masks.append(~np.any(np.isnan(x_freq_subset), axis=(2, 3)).flatten())
-                        mask = np.any(group_masks, axis=0)
+                            g_mask = ~np.any(np.isnan(x_freq_subset), axis=(2, 3)).flatten()
+
+                            # The mask is True if there is at least one valid group (logical OR -> |)
+                            mask_groups = g_mask if mask_groups is None else mask_groups | g_mask
+
+                            # Mandatory groups
+                            if (
+                                self.cfg.nan_probability is not None
+                                and self.cfg.nan_probability[group_name]["nan_seq"] == 0
+                            ):
+                                # The mask is True if all mandatory groups are True (logical AND -> &)
+                                mask_mandatory_groups = (
+                                    g_mask if mask_mandatory_groups is None else mask_mandatory_groups & g_mask
+                                )
+
+                        # Final mask: least one group valid AND all mandatory groups valid
+                        mask = mask_groups if mask_mandatory_groups is None else mask_groups & mask_mandatory_groups
 
                     flag[self.cfg.seq_length_hindcast - 1 :] &= mask
                     aux_index += v["n_steps"] * v["freq_factor"]
@@ -629,12 +659,28 @@ class BaseDataset(Dataset):
                 # Case 2: If have multiple groups of variables, all the groups need to have NaN elements in
                 # the same point to make the sample invalid.
                 elif isinstance(self.cfg.forecast_input, dict):
-                    group_masks = []
-                    for v in self.cfg.forecast_input.values():
-                        x = df_ts[v].values[self.cfg.seq_length_hindcast :]
+                    mask_groups = None
+                    mask_mandatory_groups = None
+                    for group_name, group_var in self.cfg.forecast_input.items():
+                        x = df_ts[group_var].values[self.cfg.seq_length_hindcast :]
                         x_slide_view = sliding_window_view(x, (self.cfg.seq_length_forecast, x.shape[1]))
-                        group_masks.append(~np.any(np.isnan(x_slide_view), axis=(2, 3)).flatten())
-                    mask = np.any(group_masks, axis=0)
+                        g_mask = ~np.any(np.isnan(x_slide_view), axis=(2, 3)).flatten()
+
+                        # The mask is True if there is at least one valid group (logical OR -> |)
+                        mask_groups = g_mask if mask_groups is None else mask_groups | g_mask
+
+                        # Mandatory groups
+                        if (
+                            self.cfg.nan_probability is not None
+                            and self.cfg.nan_probability[group_name]["nan_seq"] == 0
+                        ):
+                            # The mask is True if all mandatory groups are True (logical AND -> &)
+                            mask_mandatory_groups = (
+                                g_mask if mask_mandatory_groups is None else mask_mandatory_groups & g_mask
+                            )
+
+                    # Final mask: least one group valid AND all mandatory groups valid
+                    mask = mask_groups if mask_mandatory_groups is None else mask_groups & mask_mandatory_groups
 
                 flag[self.cfg.seq_length_hindcast - 1 : last_forecast] &= mask
 

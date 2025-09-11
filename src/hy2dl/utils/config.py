@@ -34,10 +34,11 @@ class Config(object):
         if not dev_mode:
             Config._check_cfg_keys(cfg=self._cfg)
 
-        # Check consistency of inputs
+        # Multiple checks to ensure valid configuration
         self._check_dynamic_inputs()
         self._check_seq_length()
         self._check_embeddings()
+        self._check_models()
         self._check_nan_settings()
         self._check_num_workers()
         self._device = Config._check_device(device=self._cfg.get("device", "cpu"))
@@ -93,6 +94,16 @@ class Config(object):
                     "`dynamic_input` and `forecast_input` have different dimensions. "
                     "This is supported only if `dynamic_embedding` is specified"
                 )
+            )
+
+    def _check_models(self):
+        """Check for specific configurations required by certain models."""
+        # Check forecast configuration
+        if self.model == "forecast_lstm" and (self.seq_length_forecast == 0 or len(self.forecast_input) == 0):
+            raise ValueError("`forecast_lstm` requires `seq_length_forecast > 0` and `forecast_input` to be specified.")
+        if self.model == "hybrid" and (self.conceptual_model is None or self.dynamic_input_conceptual_model is None):
+            raise ValueError(
+                "`hybrid` model requires `conceptual_model` and `dynamic_input_conceptual_model` to be specified."
             )
 
     def _check_nan_settings(self):
@@ -237,7 +248,9 @@ class Config(object):
             "dropout": embedding.get("dropout", 0.0),
         }
 
+    # -----------------
     # From this point forward, we define properties to access the configuration values.
+    # -----------------
     @property
     def batch_size_training(self) -> int:
         return self._cfg.get("batch_size_training")
@@ -342,6 +355,10 @@ class Config(object):
     @property
     def nan_probabilistic_masking(self) -> bool:
         return self._cfg.get("nan_probabilistic_masking", False)
+
+    @nan_probabilistic_masking.setter
+    def nan_probabilistic_masking(self, value: bool) -> None:
+        self._cfg["nan_probabilistic_masking"] = value
 
     @property
     def num_mixture_components(self) -> int:
