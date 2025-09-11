@@ -405,7 +405,10 @@ class Config(object):
     @property
     def path_save_folder(self) -> Path:
         path = self._cfg.get("path_save_folder")
-        return Path(path) if path else Path(f"../results/{self.experiment_name}_seed_{self.random_seed}")
+        if path:
+            return Path(f"{path}/{self.experiment_name}")
+        else:
+            return Path(f"../results/{self.experiment_name}_seed_{self.random_seed}")
 
     @property
     def predict_last_n(self) -> int:
