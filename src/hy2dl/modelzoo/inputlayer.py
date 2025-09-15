@@ -23,12 +23,10 @@ class InputLayer(nn.Module):
         Configuration file.
     embedding_type : str
         Type of embedding to use (hindcast or forecast).
-    assemble : bool
-        Whether to assemble the input samples or not.
 
     """
 
-    def __init__(self, cfg: Config, embedding_type: str = "hindcast", assemble: bool = True):
+    def __init__(self, cfg: Config, embedding_type: str = "hindcast"):
         super().__init__()
 
         self.embedding_type = embedding_type
@@ -63,14 +61,11 @@ class InputLayer(nn.Module):
         # Output size of the input layer
         self.output_size = self.dynamic_input_size + self.static_input_size + self.flag_info["n_flags"]
 
-        # Boolean to define if the sample will be assembled or returned by parts
-        self._assemble = assemble
-
         # Save config
         self.cfg = cfg
 
     def forward(
-        self, sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]
+        self, sample: dict[str, torch.Tensor | dict[str, torch.Tensor]], assemble: bool = True
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Forward pass of embedding networks.
 
@@ -79,61 +74,45 @@ class InputLayer(nn.Module):
         sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]
             Dictionary with the different tensors / dictionaries that will be used for the forward pass.
 
+        assemble: bool
+            Whether to assemble the different tensors into a single tensor or return a dictionary with the different
+
         Returns
         -------
-        _sample: torch.Tensor | dict[str, torch.Tensor]
+        torch.Tensor | dict[str, torch.Tensor]
             Either the processed tensor or a dictionary with the different tensors that then have the be assembled
             manually
 
         """
-        _sample = {}
-
         # -------------------------
         # Dynamic inputs
         # -------------------------
         if self.cfg.nan_handling_method == "masked_mean":
-            _sample["x_d"] = self._masked_mean(sample)
+            x_d = self._masked_mean(sample)
         elif self.cfg.nan_handling_method == "input_replacement":
-            _sample["x_d"] = self._input_replacement(sample)
+            x_d = self._input_replacement(sample)
         else:
-            x_d = []
-            for k, v in self.emb_x_d.items():
-                x_d.append(v(torch.stack(list(sample[k].values()), dim=-1)))
-            _sample["x_d"] = torch.cat(x_d, dim=1)
+            x_d = torch.cat([v(torch.stack(list(sample[k].values()), dim=-1)) for k, v in self.emb_x_d.items()], dim=1)
+
+        # -------------------------
+        # Frequency flags
+        # -------------------------
+        freq_flag = (
+            self.flag_info["flag"].unsqueeze(0).expand(x_d.shape[0], -1, -1)
+            if self.flag_info.get("flag") is not None
+            else x_d.new_zeros(x_d.shape[0], x_d.shape[1], 0)
+        )
 
         # -------------------------
         # Static inputs
         # -------------------------
-        if self.cfg.static_input:
-            _sample["x_s"] = self.emb_x_s(sample["x_s"])
+        x_s = (
+            self.emb_x_s(sample["x_s"]).unsqueeze(1).expand(-1, x_d.shape[1], -1)
+            if self.cfg.static_input
+            else x_d.new_zeros(x_d.shape[0], x_d.shape[1], 0)
+        )
 
-        return self._assemble_sample(_sample) if self._assemble else _sample
-
-    def _assemble_sample(self, sample: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Assembles the sample.
-
-        Parameters
-        ----------
-        sample: dict[str, torch.Tensor]
-            Dictionary with the different tensors
-
-        Returns
-        -------
-        x: torch.Tensor
-            Assembled tensor
-
-        """
-        x_d = sample["x_d"]
-
-        # Concatenate frequency flag
-        if self.flag_info.get("flag") is not None:
-            x_d = torch.cat([x_d, self.flag_info["flag"].unsqueeze(0).expand(x_d.shape[0], -1, -1)], dim=2)
-
-        # Concatenate static input
-        if sample.get("x_s") is not None:
-            x_d = torch.cat([x_d, sample["x_s"].unsqueeze(1).expand(-1, x_d.shape[1], -1)], dim=2)
-
-        return x_d
+        return torch.cat([x_d, freq_flag, x_s], dim=2) if assemble else {"x_d": x_d, "freq_flag": freq_flag, "x_s": x_s}
 
     def _build_freq_flags(self, cfg: Config) -> dict[str, torch.Tensor]:
         """Builds flag channels.
@@ -269,11 +248,15 @@ class InputLayer(nn.Module):
 
         Implementation based on Gauch2025 [#]_
 
+        Parameters
+        ----------
+        sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]
+            Dictionary with the different tensors / dictionaries that will be used for the forward pass.
+
         Returns
         -------
-        torch.Tensor | list[torch.Tensor]
-            tensor of embedded dynamic inputs. It can also return the list the tensors before the embedding, , in case
-            one needs to assemble it manually (e.g. arLSTM)
+        torch.Tensor
+            tensor of embedded dynamic inputs.
 
         References
         ----------
@@ -285,7 +268,7 @@ class InputLayer(nn.Module):
         x_d = []
         # Compute group-level dropout mask
         if self.cfg.nan_probabilistic_masking:
-            group_mask = self._mask_groups()
+            self.group_mask = self._mask_groups(sample=sample)
 
         for k, v in self.emb_x_d.items():
             freq_k = k.split(self._x_d_key + "_")[-1]
@@ -307,7 +290,7 @@ class InputLayer(nn.Module):
                         probability_mask = (
                             torch.rand(x_d_group.shape[0], x_d_group.shape[1], device=self.cfg.device)
                             < self.cfg.nan_probability[group_id]["nan_step"]
-                        ) | group_mask[group_id]
+                        ) | self.group_mask[group_id].unsqueeze(1)
                         x_d_group[probability_mask] = torch.nan
 
                     # I recompute the mask, becase there can also be NaNs in the original data that we need to consider.
@@ -318,15 +301,15 @@ class InputLayer(nn.Module):
                     x_d_group = torch.cat([x_d_group, mask.float()], dim=-1)
                     x_d_groups.append(x_d_group)
 
-                if self._assemble:
-                    x_d.append(v(torch.cat(x_d_groups, dim=2)))
+                # Concatenate groups and pass them through embedding
+                x_d.append(v(torch.cat(x_d_groups, dim=2)))
 
             # Case in which I only have one group of variables. This can happen, for example, if for one frequency I
             # have groups and for another frequency I do not.
             else:
                 x_d.append(v(torch.stack(list(sample[k].values()), dim=-1)))
 
-        return torch.cat(x_d, dim=1) if self._assemble else x_d
+        return torch.cat(x_d, dim=1)
 
     def _masked_mean(self, sample) -> torch.Tensor | list[torch.Tensor]:
         """Apply the masked-mean function to handle missing inputs.
@@ -337,11 +320,15 @@ class InputLayer(nn.Module):
 
         Implementation based on Gauch2025 [#]_
 
+        Parameters
+        ----------
+        sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]
+            Dictionary with the different tensors / dictionaries that will be used for the forward pass.
+
         Returns
         -------
-        torch.Tensor | list[torch.Tensor]
-            Masked-mean tensor of dynamic inputs. It can also return the list the embedded tensors before applying the
-            masked-mean function, in case one needs to assemble it manually (e.g. arLSTM)
+        torch.Tensor
+            Masked-mean tensor of dynamic inputs.
 
         References
         ----------
@@ -355,7 +342,7 @@ class InputLayer(nn.Module):
 
         # Compute group-level dropout mask
         if self.cfg.nan_probabilistic_masking:
-            group_mask = self._mask_groups()
+            self.group_mask = self._mask_groups(sample=sample)
 
         for k, v in self.emb_x_d.items():
             freq_k = k.split(self._x_d_key + "_")[-1]
@@ -376,7 +363,7 @@ class InputLayer(nn.Module):
                         probability_mask = (
                             torch.rand(x_d_group.shape[0], x_d_group.shape[1], device=self.cfg.device)
                             < self.cfg.nan_probability[group]["nan_step"]
-                        ) | group_mask[group]
+                        ) | self.group_mask[group].unsqueeze(1)
                         x_d_group[probability_mask] = torch.nan
 
                     # Before the forward pass of the embedding we set Nans to zero to avoid NaN gradients. I recompute
@@ -396,18 +383,19 @@ class InputLayer(nn.Module):
             else:
                 x_d.append([v(torch.stack(list(sample[k].values()), dim=-1))])
 
-        if self._assemble:
-            dynamic_output = torch.cat([torch.nanmean(torch.stack(x, dim=0), dim=0) for x in x_d], dim=1)
-            # We can have nans, even with the masked-mean architecture, if for a given timestep all the groups had nans.
-            # In this case we substitute the nans with zeros to make sure the model still runs.
-            dynamic_output = torch.where(torch.isnan(dynamic_output), 0.0, dynamic_output)
-            return dynamic_output
+        dynamic_output = torch.cat([torch.nanmean(torch.stack(x, dim=0), dim=0) for x in x_d], dim=1)
+        # We can have nans, even with the masked-mean architecture, if for a given timestep all the groups had nans.
+        # In this case we substitute the nans with zeros to make sure the model still runs.
+        dynamic_output = torch.where(torch.isnan(dynamic_output), 0.0, dynamic_output)
+        return dynamic_output
 
-        else:
-            return x_d
-
-    def _mask_groups(self):
+    def _mask_groups(self, sample):
         """Create a mask for the input groups based on their nan_seq probabilities.
+
+        Parameters
+        ----------
+        sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]
+            Dictionary with the different tensors / dictionaries that will be used for the forward pass.
 
         Returns
         -------
@@ -415,13 +403,16 @@ class InputLayer(nn.Module):
             Dictionary with boolean values indicating whether to drop each input group.
 
         """
-
         nan_seq_probs = torch.tensor([v["nan_seq"] for v in self.cfg.nan_probability.values()], device=self.cfg.device)
-        drop_group = torch.rand(len(nan_seq_probs), device=self.cfg.device) < nan_seq_probs
-        if drop_group.all():  # Don't allow all sequences to be dropped out.
-            drop_group[torch.randint(0, drop_group.numel(), (1,), device=self.cfg.device)] = False
+        drop_group = torch.rand(sample["y_obs"].shape[0], len(nan_seq_probs), device=self.cfg.device) < nan_seq_probs
+        all_dropped = drop_group.all(dim=1)
+        if all_dropped.any():  # Don't allow all groups to be dropped out.
+            # For samples with all groups dropped, randomly un-drop one group
+            drop_group[
+                torch.where(all_dropped)[0], torch.randint(0, drop_group.size(1), (1,), device=self.cfg.device)
+            ] = False
 
-        return dict(zip(self.cfg.nan_probability.keys(), drop_group, strict=True))
+        return dict(zip(self.cfg.nan_probability.keys(), drop_group.T, strict=True))
 
     @staticmethod
     def build_embedding(input_dim: int, embedding: Optional[dict[str, str | float | list[int]]]):

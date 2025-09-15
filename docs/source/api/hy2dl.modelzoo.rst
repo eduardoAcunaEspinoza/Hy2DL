@@ -1,5 +1,5 @@
-hy2dl.modelzoo package
-======================
+hy2dl.modelzoo
+================
 
 .. automodule:: hy2dl.modelzoo
    :members:

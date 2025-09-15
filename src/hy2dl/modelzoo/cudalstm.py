@@ -23,7 +23,7 @@ class CudaLSTM(nn.Module):
         # Embedding network
         self.embedding_hindcast = InputLayer(cfg)
 
-        # Pytorch implementation of LSTM
+        # LSTM
         self.lstm = nn.LSTM(
             input_size=self.embedding_hindcast.output_size, hidden_size=cfg.hidden_size, batch_first=True
         )
