@@ -47,7 +47,8 @@ class Config(object):
         """Create folder structure and get the logger where the experiment progress will be reported"""
         # Create folder to store the results and initialize logger
         self._create_folder()
-        self.logger = get_logger(self.path_save_folder)
+        # Create logger
+        self.logger = get_logger(self.path_save_folder, f"{self.experiment_name}_{self.random_seed}")
 
     def dump(self) -> None:
         """Write the current configuration to a YAML file."""
@@ -310,7 +311,10 @@ class Config(object):
 
     @property
     def experiment_name(self) -> str:
-        return self._cfg.get("experiment_name", "experiment_" + str(random.randint(0, 10_000)))
+        # If experiment_name is not set, create a random one
+        if self._cfg.get("experiment_name") is None:
+            self._cfg["experiment_name"] = "experiment_" + str(random.randint(0, 10_000))
+        return self._cfg.get("experiment_name")
 
     @property
     def forcings(self) -> list[str]:
@@ -428,7 +432,9 @@ class Config(object):
 
     @property
     def random_seed(self) -> int:
-        return self._cfg.get("random_seed", int(np.random.uniform(0, 1e6)))
+        if self._cfg.get("random_seed") is None:
+            self._cfg["random_seed"] = int(np.random.uniform(0, 1e6))
+        return self._cfg.get("random_seed")
 
     @random_seed.setter
     def random_seed(self, value: int):

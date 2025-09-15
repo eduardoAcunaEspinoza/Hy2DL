@@ -203,8 +203,9 @@ Embedding networks
 
 - ``nan_probability`` (dict[str, dict[str, float]]):
     Method to included NaN values during training to make the model more robust to missing values during inference. To use this argument, groups of variables need to be
-    defined in ``dynamic_input``. The ``nan_probability`` argument should be specify as a nested dictionary where the first key is the group id defined in ``dynamic_input``,
-    and each value is another dictionary with the keys ``nan_seq`` and ``nan_step`` to indicate the probabilty of masking an entire sequence or a single timestep, respectively.
+    defined in ``dynamic_input`` and, if applicable, ``forecast_input``. The ``nan_probability`` argument should be specify as a nested dictionary where the first key is the 
+    group id defined in ``dynamic_input``, and each value is another dictionary with the keys ``nan_seq`` and ``nan_step`` to indicate the probabilty of masking an entire sequence 
+    or a single timestep, respectively.
     For details, see: `Gauch et al (2025) <https://doi.org/10.5194/egusphere-2025-1224>`_
 
 .. code-block:: python
@@ -217,7 +218,7 @@ Embedding networks
 
 - ``nan_probabilistic_masking`` (bool):   
     Boolean to specify is probabilistic masking should be used. In this case ``nan_handling_method`` and ``nan_probability`` must be specified. Useful to turn on/off masking
-    for training/evaliuation.
+    for training/evaluation.
 
 - ``output_features`` (int):
     Number of output features for linear layer after LSTM. Default is 1 (e.g. deterministic discharge prediction)
