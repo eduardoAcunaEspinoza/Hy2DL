@@ -410,7 +410,7 @@ class Config(object):
     def path_save_folder(self) -> Path:
         path = self._cfg.get("path_save_folder")
         if path:
-            return Path(f"{path}/{self.experiment_name}")
+            return Path(f"{path}/{self.experiment_name}_seed_{self.random_seed}")
         else:
             return Path(f"../results/{self.experiment_name}_seed_{self.random_seed}")
 
