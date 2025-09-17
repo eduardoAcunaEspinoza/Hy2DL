@@ -316,6 +316,13 @@ class Config(object):
             self._cfg["experiment_name"] = "experiment_" + str(random.randint(0, 10_000))
         return self._cfg.get("experiment_name")
 
+    @experiment_name.setter
+    def experiment_name(self, value: str):
+        if not isinstance(value, str):
+            raise ValueError("experiment_name must be a string.")
+        # Set a custom experiment name, this also determines the folder where results are stored
+        self._cfg["experiment_name"] = value
+
     @property
     def forcings(self) -> list[str]:
         return Config._as_default_list(self._cfg.get("forcings"))
@@ -410,7 +417,7 @@ class Config(object):
     def path_save_folder(self) -> Path:
         path = self._cfg.get("path_save_folder")
         if path:
-            return Path(f"{path}/{self.experiment_name}")
+            return Path(f"{path}/{self.experiment_name}_seed_{self.random_seed}")
         else:
             return Path(f"../results/{self.experiment_name}_seed_{self.random_seed}")
 
