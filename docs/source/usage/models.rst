@@ -50,3 +50,11 @@ Forecast-LSTM: Forecast LSTM
 to handle different amount of variables or varying types and quality of data. The model supports different temporal frequencies in the hindcast period.
 
 An example using this model can be found in the notebook folder, in the github repository.
+
+LSTM-MDN: LSTM with Mixture Density Network output layer
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+:py:class:`hy2dl.modelzoo.lstmmdn.LSTM-MDN` combines an LSTM network with a Mixture Density Network (MDN) output layer. The MDN layer allows to model the output as a mixture of probability distributions, enabling probabilistic predictions.
+
+For reference see: `Klotz et al (2022) <https://doi.org/10.5194/hess-26-1673-2022>`_
+
+An example using this model can be found in the notebook folder, in the github repository.

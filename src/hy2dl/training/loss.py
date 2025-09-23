@@ -92,7 +92,29 @@ def loss_nll(
     dist: Distribution,
     y_obs: torch.Tensor,
 ) -> torch.Tensor:
-    y = y_obs.unsqueeze(-2)  # [B, L, 1, T]
+    """Negative log likelihood loss
+
+    Calculate negative log likelihood i.e. the log probability of `y_obs` given a mixture distribution defined
+    by `dist`, `params` and `weights`. See specific distribution details below.
+    Note: this function returns the mean NLL for each target.
+
+    Parameters
+    ----------
+    params : dict[str, torch.Tensor]
+        Dictionary of distribution parameters. The keys and shapes depend on `dist`
+    weights : torch.Tensor
+        Mixture weights. Shape [B, N, T]
+    dist : Distribution
+        Distribution type. See `Distribution` enum for options.
+    y_obs : torch.Tensor
+        Observed values. Shape [B, N, T]
+
+    Returns
+    -------
+    torch.Tensor
+        NLL for each target. Shape [T]
+    """
+    y = y_obs.unsqueeze(-2)  # [B, N, 1, T]
 
     match dist:
         case Distribution.GAUSSIAN:
