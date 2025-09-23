@@ -30,7 +30,7 @@ class LSTMMDN(nn.Module):
     - I: num_input_features
     - L: seq_length
     - N: predict_last_n
-    - K: num_components
+    - K: num_mixture_components
     - T: num_targets
     - S: num_samples
     - Q: num_quantiles

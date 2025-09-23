@@ -6,10 +6,9 @@
 #   - `num_components`: 1
 #   - `distribution`: gaussian
 
-experiment_name: LSTMGMM-250-01_NLL-GAUSSIAN_S05_010
-path_save_folder: results/
-path_data: ../CAMELS-US
-path_entities: data/basin_id/basins_camels_us_10.txt
+experiment_name: LSTMGMM-250-01
+path_data: ../../CAMELS-US
+path_entities: ../data/basin_id/basins_camels_us_10.txt
 dynamic_input:
 - prcp(mm/day)_daymet
 - PRCP(mm/day)_nldas
@@ -77,6 +76,6 @@ random_seed: 5
 dataset: camels_us
 predict_last_n: 1
 model: lstmmdn
-num_components: 1
+num_mixture_components: 1
 distribution: gaussian
 hidden_size: 250
