@@ -3,12 +3,12 @@
 #
 # LSTM-MDN parameters:
 #   - `model`: lstmmdn
-#   - `num_components`: 1
-#   - `distribution`: gaussian
+#   - `num_components`: 3
+#   - `distribution`: laplacian
 
-experiment_name: LSTMGMM-250-01
+experiment_name: LSTMCMAL-250-03
 path_data: ../../CAMELS-US
-path_entities: ../data/basin_id/basins_camels_us_10.txt
+path_entities: ../data/basin_id/basins_camels_us_531.txt
 dynamic_input:
 - prcp(mm/day)_daymet
 - PRCP(mm/day)_nldas
@@ -63,19 +63,19 @@ testing_period:
 seq_length: 365
 batch_size_training: 256
 batch_size_evaluation: 1024
-epochs: 10
-dropout_rate: 0.4
+epochs: 5
+dropout_rate: 0.5
 initial_forget_bias: 3.0
 learning_rate:
-  1: 0.001
+  1: 0.0005
 validate_every: 1
 validate_n_random_basins: -1
-device: cpu
+device: gpu
 num_workers: 4
-random_seed: 5
+random_seed: 42
 dataset: camels_us
 predict_last_n: 1
 model: lstmmdn
-num_mixture_components: 1
-distribution: gaussian
+num_mixture_components: 3
+distribution: laplacian
 hidden_size: 250
