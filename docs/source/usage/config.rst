@@ -304,8 +304,10 @@ Forecast model
 
 Probabilistic model
 -----------------------
-Documentation in progress.
-
+- ``num_mixture_components`` (int):
+    Number of mixture components in the Mixture Density Network (MDN). Default is 3.
+- ``distribution`` (str):
+    Type of distribution used in the MDN. Default is "gaussian". Check `hy2dl.utils.distribution` for available options.
 
 CAMELS US specific
 -----------------------

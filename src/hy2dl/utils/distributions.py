@@ -2,6 +2,8 @@ from enum import Enum
 
 
 class Distribution(Enum):
+    """Enumeration of supported probability distributions."""
+    
     GAUSSIAN = "gaussian"
     LAPLACIAN = "laplacian"
     

@@ -8,7 +8,7 @@ import torch
 import yaml
 
 from hy2dl.utils.logging import get_logger
-
+from hy2dl.utils.distributions import Distribution
 
 class Config(object):
     """Read run configuration from the specified path or dictionary and parse it into a configuration object.
@@ -106,6 +106,11 @@ class Config(object):
             raise ValueError(
                 "`hybrid` model requires `conceptual_model` and `dynamic_input_conceptual_model` to be specified."
             )
+        if self.model == "lstmmdn":
+            if self.distribution not in [dist.value for dist in Distribution]:
+                raise ValueError(f"`distribution`: {self.distribution} not supported.")
+            if self.num_mixture_components is None:
+                raise ValueError("`lstmmdn` model requires `num_mixture_components` to be specified.")
 
     def _check_nan_settings(self):
         """Check settings when working with nan handling methods"""
