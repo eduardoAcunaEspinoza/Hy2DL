@@ -5,7 +5,7 @@ In the following, we present the folder structure required to use the different 
 
 ### CAMELS_DE
 
-The CAMELS_DE dataset can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.16755906).  
+The CAMELS_DE dataset can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.16755906).
 To add this dataset to the library, use the following folder structure:
 
 ```

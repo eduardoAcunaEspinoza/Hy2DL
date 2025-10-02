@@ -38,12 +38,15 @@ Detailed documentation for the repository can be found at [Hy2DL.readthedocs.io]
 If you find **Hy²DL** useful in your research or applications, please cite it as:
 
 ```bibtex
-@software{hy2dl2025,
-  author       = {Eduardo Acuña-Espinoza},
-  title        = {Hy²DL: Hybrid Hydrological Modeling using Deep Learning methods},
-  year         = {2025},
+@software{acuna2025,
+  author       = {Eduardo Acuna and
+                  Manuel Álvarez Chaves and
+                  Alexander Dolich and
+                  Ashish Manoj J},
+  title        = {Hy2DL: Hybrid Hydrological modeling using Deep Learning methods},
+  year         = 2025,
   publisher    = {Zenodo},
-  doi          = {10.5281/zenodo.XXXXXXX},
-  url          = {https://doi.org/10.5281/zenodo.XXXXXXX}
+  doi          = {10.5281/zenodo.17251944},
+  url          = {https://doi.org/10.5281/zenodo.17251944},
 }
 ```
