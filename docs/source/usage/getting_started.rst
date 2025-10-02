@@ -64,6 +64,11 @@ For an editable/development installation:
 
       pip install -e .
 
+Data
+----
+
+To use Hy2DL, you will need to download and prepare the datasets. These are not included in the package. Instructions on how to download and prepare the datasets can be found in the `data folder <https://github.com/eduardoAcunaEspinoza/Hy2DL/tree/main/data>`_ of the repository.
+
 Running experiments
 ---------------------
 
@@ -77,9 +82,3 @@ Experiment configurations can be specified in two ways:
 - Directly as a python dictionary
 
 The folder ``examples`` provides ready-to-use configurations that can be directly loaded in the notebooks. In addition, the notebook ``LSTM_Forecast.ipynb`` demonstrates how to define the configuration as a Python dictionary, offering a hands-on example.
-
-
-Data
-----
-
-To use Hy2DL, you will need to download and prepare the datasets. These are not included in the package. Instructions on how to download and prepare the datasets can be found in the `data folder <https://github.com/eduardoAcunaEspinoza/Hy2DL/tree/main/data>`_ of the repository.
