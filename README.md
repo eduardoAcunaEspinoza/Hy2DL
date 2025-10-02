@@ -18,7 +18,7 @@ The codes presented in the repository are in the form of python scripts. Additio
 
 ## Installation
 A release version is available on [PyPI](https://pypi.org/project/hy2dl/) and can be installed using:
- 
+
 `uv`
 ```
 uv add hy2dl
@@ -29,7 +29,7 @@ or `pip`.
 pip install hy2dl
 ```
 
-The `pyproject.toml` include the package requirements.
+The `pyproject.toml` file includes the package requirements.
 
 ## Documentation:
 Detailed documentation for the repository can be found at [Hy2DL.readthedocs.io](https://hy2dl.readthedocs.io/en/latest/index.html). 
