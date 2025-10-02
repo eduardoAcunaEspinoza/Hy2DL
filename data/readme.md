@@ -1,7 +1,13 @@
-In the following, we present a scheme of the folder structure required to use the different datasets.
+Datasets: Folder Structure and Preparation
+------------------------------------------
 
-### CAMELS_DE:
-The CAMELS_DE dataset can be downloaded from https://doi.org/10.5281/zenodo.13837553. To add this dataset to the library, the following folder structure should be used:
+In the following, we present the folder structure required to use the different datasets with **Hy²DL**.
+
+### CAMELS_DE
+
+The CAMELS_DE dataset can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.16755906).  
+To add this dataset to the library, use the following folder structure:
+
 ```
 CAMELS_DE/
   timeseries/ 
@@ -10,8 +16,11 @@ CAMELS_DE/
   ...
   CAMELS_DE_xxx_attributes.csv
 ```
-### CAMELS_GB:
-To use CAMELS_GB can be downloaded from https://doi.org/10.5285/8344e4f3-d2ea-44f5-8afa-86d2987543a9. To add this dataset to the library, the following folder structure should be used:
+
+### CAMELS_GB
+
+The CAMELS_GB dataset can be downloaded from [Zenodo](https://doi.org/10.5285/8344e4f3-d2ea-44f5-8afa-86d2987543a9).
+To add this dataset to the library, use the following folder structure:
 
 ```
 CAMELS_GB/
@@ -21,8 +30,11 @@ CAMELS_GB/
   ...
   CAMELS_GB_xxx_attributes.csv
 ```
-###  CAMELS_US:
-To use CAMELS_US can be downloaded from https://gdex.ucar.edu/dataset/camels.html. To add this dataset to the library, the following folder structure should be used:
+
+### CAMELS_US
+
+The CAMELS_US dataset can be downloaded from [Zenodo](https://doi.org/10.5065/D6MW2F4D).
+To add this dataset to the library, use the following folder structure:
 
 ```
 CAMELS_US/
@@ -36,16 +48,23 @@ CAMELS_US/
     camels_xxx.txt 
   usgs_streamflow/
 ```
-###  CAMELS_US hourly resolution:
-Hourly products from the CAMELS_US dataset can be downloaded from https://doi.org/10.5281/zenodo.4072701. To add this dataset to the library, an additional folder (hourly/) should be created inside the CAMELS_US structure. 
+
+### CAMELS_US (hourly resolution)
+
+Hourly products from CAMELS_US can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.4072701).
+To add this dataset, create an additional `hourly/` folder inside the CAMELS_US structure:
+
 ```
 CAMELS_US/
   hourly/               
     nldas_hourly/
     usgs-streamflow/
 ```
-### CARAVAN:
-To use CARAVAN,the original dataset can be downloaded from https://doi.org/10.5281/zenodo.10968468. Support is only provided to the csv files from the Caravan datset. To add this dataset to the library, the following folder structure should be used:
+
+### CARAVAN
+
+The CARAVAN dataset can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.10968468).
+Support is provided only for the CSV files. To add this dataset to the library, use the following folder structure:
 
 ```
 Caravan/
@@ -76,4 +95,5 @@ Caravan/
     hysets/
     lamah/
 ```
-For using with the community extensions https://github.com/kratzert/Caravan/discussions/10  from Caravan, the required extension dataset should be manually downloaded and then the corresponding folders added to the original file structure given above. 
+
+For using **community extensions** from CARAVAN (`GitHub discussion <https://github.com/kratzert/Caravan/discussions/10>`_), the required extension dataset should be manually downloaded and added to the corresponding folders in the structure above.
