@@ -5,7 +5,7 @@ In the following, we present the folder structure required to use the different 
 
 ### CAMELS_DE
 
-The CAMELS_DE dataset can be downloaded from `Zenodo <https://doi.org/10.5281/zenodo.16755906>`_.  
+The CAMELS_DE dataset can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.16755906).  
 To add this dataset to the library, use the following folder structure:
 
 ```
@@ -19,7 +19,7 @@ CAMELS_DE/
 
 ### CAMELS_GB
 
-The CAMELS_GB dataset can be downloaded from `Zenodo <https://doi.org/10.5285/8344e4f3-d2ea-44f5-8afa-86d2987543a9>`_.  
+The CAMELS_GB dataset can be downloaded from [Zenodo](https://doi.org/10.5285/8344e4f3-d2ea-44f5-8afa-86d2987543a9).
 To add this dataset to the library, use the following folder structure:
 
 ```
@@ -33,7 +33,7 @@ CAMELS_GB/
 
 ### CAMELS_US
 
-The CAMELS_US dataset can be downloaded from `Zenodo <https://doi.org/10.5065/D6MW2F4D>`_.  
+The CAMELS_US dataset can be downloaded from [Zenodo](https://doi.org/10.5065/D6MW2F4D).
 To add this dataset to the library, use the following folder structure:
 
 ```
@@ -51,7 +51,7 @@ CAMELS_US/
 
 ### CAMELS_US (hourly resolution)
 
-Hourly products from CAMELS_US can be downloaded from `Zenodo <https://doi.org/10.5281/zenodo.4072701>`_.  
+Hourly products from CAMELS_US can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.4072701).
 To add this dataset, create an additional `hourly/` folder inside the CAMELS_US structure:
 
 ```
@@ -63,7 +63,7 @@ CAMELS_US/
 
 ### CARAVAN
 
-The CARAVAN dataset can be downloaded from `Zenodo <https://doi.org/10.5281/zenodo.10968468>`_.  
+The CARAVAN dataset can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.10968468).
 Support is provided only for the CSV files. To add this dataset to the library, use the following folder structure:
 
 ```
