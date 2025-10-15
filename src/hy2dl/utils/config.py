@@ -7,8 +7,9 @@ import numpy as np
 import torch
 import yaml
 
-from hy2dl.utils.logging import get_logger
 from hy2dl.utils.distributions import Distribution
+from hy2dl.utils.logging import get_logger
+
 
 class Config(object):
     """Read run configuration from the specified path or dictionary and parse it into a configuration object.
@@ -147,7 +148,7 @@ class Config(object):
         if num_workers < 0:
             raise ValueError(f"num_workers must be non-negative, got {num_workers}.")
         elif num_workers > 0 and os.cpu_count() < num_workers:
-            raise RuntimeError(f"num_workers ({num_workers}) must be less than number of cores ({os.cpu_count}).")
+            raise RuntimeError(f"num_workers ({num_workers}) must be less than number of cores ({os.cpu_count()}).")
 
     def _check_seq_length(self):
         """Checks the consistency of sequence length when custom_seq_processing is used."""
