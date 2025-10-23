@@ -1,0 +1,44 @@
+experiment_name: LSTM_CARAVAN
+path_data: ../data/Caravan
+path_entities_training: ../data/basin_id/basins_caravan_7.txt
+path_entities_validation: ../data/basin_id/basins_caravan_7.txt
+path_entities_testing: ../data/basin_id/basins_caravan_7.txt
+dynamic_input:
+- total_precipitation_sum
+- temperature_2m_mean
+- surface_net_thermal_radiation_mean
+target:
+- streamflow
+static_input:
+- area
+- p_mean
+- ele_mt_sav
+- frac_snow
+- pet_mm_syr
+training_period:
+- '1980-10-01'
+- '1997-12-31'
+validation_period:
+- '1998-10-01'
+- '2000-09-30'
+testing_period:
+- '2001-01-01'
+- '2015-12-31'
+seq_length: 365
+hidden_size: 64
+batch_size_training: 256
+batch_size_evaluation: 1024
+epochs: 30
+dropout_rate: 0.4
+learning_rate:
+  1: 0.001
+  10: 0.0005
+  20: 0.0001
+validate_every: 5
+validate_n_random_basins: -1
+device: cuda:0
+num_workers: 4
+random_seed: 1
+dataset:Caravan
+model: CudaLSTM
+initial_forget_bias: 3.0
