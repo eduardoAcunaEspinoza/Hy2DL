@@ -36,9 +36,9 @@ learning_rate:
   20: 0.0001
 validate_every: 5
 validate_n_random_basins: -1
-device: cuda:0
+device: cpu
 num_workers: 4
 random_seed: 1
-dataset:Caravan
+dataset: Caravan
 model: CudaLSTM
 initial_forget_bias: 3.0
