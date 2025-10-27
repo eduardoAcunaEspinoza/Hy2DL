@@ -103,7 +103,7 @@ Community-contributed Caravan extensions (e.g., camelsde, grdc) can be added man
 1. Locate the extension and its Zenodo download link on the Caravan GitHub Discussions page: https://github.com/kratzert/Caravan/discussions/10  
 2. Download the dataset archive from the linked Zenodo record.  
 3. Unzip the archive and copy its contents into the corresponding Caravan subfolders (for example: attributes/, timeseries/, shapefiles/). Preserve the folder layout provided by the original Caravan dataset.  
-4. Ensure CSV files are placed in the CSV-supported folders so Hy²DL can read them.  
+4. Ensure CSV files are placed in the CSV-supported folders so Hy2DL can read them.  
 5. Repeat the same process to add your own dataset (if any) created using the Caravan code.
 
-Tip: verify the final folder names match the structure described above so Hy²DL can detect and load the data.
+Tip: verify the final folder names match the structure described above so Hy2DL can detect and load the data.
