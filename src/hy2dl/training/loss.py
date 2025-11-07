@@ -101,9 +101,9 @@ def loss_nll(
     Parameters
     ----------
     params : dict[str, torch.Tensor]
-        Dictionary of distribution parameters. The keys and shapes depend on `dist`
+        Dictionary of distribution parameters. The keys and shapes depend on `dist`.
     weights : torch.Tensor
-        Mixture weights. Shape [B, N, T]
+        Mixture weights. Shape [B, N, K, T]
     dist : Distribution
         Distribution type. See `Distribution` enum for options.
     y_obs : torch.Tensor
@@ -140,5 +140,5 @@ def loss_nll(
             log_p = log_p - torch.log(kappa + 1 / kappa) - torch.log(scale)
 
     log_w = torch.log(torch.clamp(weights, min=1e-10))
-    loss = -torch.logsumexp(log_p + log_w, dim=-2)
+    loss = -torch.logsumexp(log_p + log_w, dim=2)
     return loss.mean(dim=(0, 1))

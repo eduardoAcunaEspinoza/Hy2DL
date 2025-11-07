@@ -298,7 +298,7 @@ class LSTMMDN(nn.Module):
                 log_p = log_p - torch.log(kappa + 1 / kappa) - torch.log(scale)
 
         log_w = torch.log(torch.clamp(weights, min=1e-10))
-        log_p = torch.logsumexp(log_p + log_w, dim=-2) # [B, N, T]
+        log_p = torch.logsumexp(log_p + log_w, dim=2) # [B, N, T]
     
         return log_p
     
