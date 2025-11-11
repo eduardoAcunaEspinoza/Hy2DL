@@ -37,7 +37,6 @@ class Config(object):
 
         # Multiple checks to ensure valid configuration
         self._check_dynamic_inputs()
-        # self._check_static_inputs()
         self._check_seq_length()
         self._check_embeddings()
         self._check_models()
@@ -73,8 +72,6 @@ class Config(object):
                     if isinstance(v, dict) and self.nan_handling_method is None:
                         raise ValueError("Groups of variables are only supported with a `nan_handling_method`")
 
-    # def _check_static_inputs():
-    #     if 
     def _check_embeddings(self):
         if isinstance(self.dynamic_input, dict) and self.dynamic_embedding is None:
             raise ValueError("`dynamic_input` as dictionary is only supported when `dynamic_embedding` is specified")
