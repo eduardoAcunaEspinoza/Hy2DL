@@ -37,6 +37,7 @@ class Config(object):
 
         # Multiple checks to ensure valid configuration
         self._check_dynamic_inputs()
+        # self._check_static_inputs()
         self._check_seq_length()
         self._check_embeddings()
         self._check_models()
@@ -72,6 +73,8 @@ class Config(object):
                     if isinstance(v, dict) and self.nan_handling_method is None:
                         raise ValueError("Groups of variables are only supported with a `nan_handling_method`")
 
+    # def _check_static_inputs():
+    #     if 
     def _check_embeddings(self):
         if isinstance(self.dynamic_input, dict) and self.dynamic_embedding is None:
             raise ValueError("`dynamic_input` as dictionary is only supported when `dynamic_embedding` is specified")
@@ -398,6 +401,11 @@ class Config(object):
     def path_additional_features(self) -> Optional[Path]:
         path = self._cfg.get("path_additional_features")
         return Path(path) if path else None
+    
+    @property
+    def path_static_2D(self) -> Optional[Path]:
+        path = self._cfg.get("path_static_2D")
+        return Path(path) if path else None
 
     @property
     def path_entities(self) -> Optional[Path]:
@@ -408,16 +416,28 @@ class Config(object):
     def path_entities_testing(self) -> Optional[Path]:
         path = self._cfg.get("path_entities_testing")
         return Path(path) if path else self.path_entities
+    
+    @path_entities_testing.setter
+    def path_entities_testing(self, value: str):
+        self._cfg["path_entities_testing"] = value
 
     @property
     def path_entities_training(self) -> Optional[Path]:
         path = self._cfg.get("path_entities_training")
         return Path(path) if path else self.path_entities
 
+    @path_entities_training.setter
+    def path_entities_training(self, value: str):
+        self._cfg["path_entities_training"] = value
+
     @property
     def path_entities_validation(self) -> Optional[Path]:
         path = self._cfg.get("path_entities_validation")
         return Path(path) if path else self.path_entities
+    
+    @path_entities_validation.setter
+    def path_entities_validation(self, value: str):
+        self._cfg["path_entities_validation"] = value
 
     @property
     def path_save_folder(self) -> Path:
