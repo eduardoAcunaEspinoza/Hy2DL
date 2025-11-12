@@ -400,11 +400,6 @@ class Config(object):
         return Path(path) if path else None
     
     @property
-    def path_static_2D(self) -> Optional[Path]:
-        path = self._cfg.get("path_static_2D")
-        return Path(path) if path else None
-
-    @property
     def path_entities(self) -> Optional[Path]:
         path = self._cfg.get("path_entities")
         return Path(path) if path else None
