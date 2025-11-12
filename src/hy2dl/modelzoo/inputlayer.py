@@ -240,15 +240,8 @@ class InputLayer(nn.Module):
         # -------------------------
         # Embeddings for static variables
         # -------------------------
-       
-        # Case 1: A set of static features is specified, but no static embedding is specified
-        if cfg.static_input and cfg.static_embedding is None:
-            self.emb_x_s = InputLayer.build_embedding(input_dim=len(cfg.static_input))
-
-        # Case 2: A set of static features is specified as well as a static embedding
-        elif cfg.static_input and cfg.static_embedding is not None:
+        if cfg.static_input:
             self.emb_x_s = InputLayer.build_embedding(input_dim=len(cfg.static_input), embedding=cfg.static_embedding)
-
 
     def _input_replacement(self, sample) -> torch.Tensor:
         """Apply input_replacement to handle missing inputs and add associated binary masks.
