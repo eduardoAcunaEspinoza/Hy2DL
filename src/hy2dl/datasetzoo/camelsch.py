@@ -9,8 +9,8 @@ from hy2dl.utils.config import Config
 
 class CAMELS_CH(BaseDataset):
     """
-    Class to process data from [version 1.0.0 of the CAMELS Germany dataset]
-    (https://doi.org/10.5281/zenodo.13837553) by [1]_ [2]_ .
+    Class to process data from [version 1.0.0 of the CAMELS Switzerland dataset]
+    (https://10.5194/essd-15-5755-2023) by [1]_.
 
     The class inherits from BaseDataset to execute the operations on how to load and process the data. However here we
     code the _read_attributes and _read_data methods, that specify how we should read the information from CAMELS DE.
@@ -29,14 +29,10 @@ class CAMELS_CH(BaseDataset):
 
     References
     ----------
-    .. [1] Loritz, R., Dolich, A., Acuña Espinoza, E., Ebeling, P., Guse, B., Götte, J., Hassler, S. K., Hauffe,
-        C., Heidbüchel, I., Kiesel, J., Mälicke, M., Müller-Thomy, H., Stölzle, M., & Tarasova, L. (2024).
-        CAMELS-DE: Hydro-meteorological time series and attributes for 1555 catchments in Germany.
-        Earth System Science Data Discussions, 2024, 1–30. https://doi.org/10.5194/essd-2024-318
-    .. [2] Dolich, A., Espinoza, E. A., Ebeling, P., Guse, B., Götte, J., Hassler, S., Hauffe, C., Kiesel, J.,
-        Heidbüchel, I., Mälicke, M., Müller-Thomy, H., Stölzle, M., Tarasova, L., & Loritz, R. (2024).
-        CAMELS-DE: hydrometeorological time series and attributes for 1582 catchments in Germany (1.0.0) [Data set].
-        Zenodo. https://doi.org/10.5281/zenodo.13837553
+    .. [1] Höge, M., Kauzlaric, M., Siber, R., Schönenberger, U., Horton, P., Schwanbeck, J., Floriancic, M. G., Viviroli, D., 
+        Wilhelm, S., Sikorska-Senoner, A. E., Addor, N., Brunner, M., Pool, S., Zappa, M., and Fenicia, F.: CAMELS-CH: hydro-meteorological 
+        time series and landscape attributes for 331 catchments in hydrologic Switzerland, Earth Syst. Sci. Data, 15, 5755–5784, 
+        https://doi.org/10.5194/essd-15-5755-2023, 2023. 
 
     """
 
