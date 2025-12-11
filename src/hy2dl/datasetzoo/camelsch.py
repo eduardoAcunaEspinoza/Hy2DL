@@ -13,7 +13,7 @@ class CAMELS_CH(BaseDataset):
     (https://10.5194/essd-15-5755-2023) by [1]_.
 
     The class inherits from BaseDataset to execute the operations on how to load and process the data. However here we
-    code the _read_attributes and _read_data methods, that specify how we should read the information from CAMELS DE.
+    code the _read_attributes and _read_data methods, that specify how we should read the information from CAMELS CH.
 
     Parameters
     ----------
