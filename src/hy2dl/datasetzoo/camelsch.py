@@ -29,10 +29,10 @@ class CAMELS_CH(BaseDataset):
 
     References
     ----------
-    .. [1] Höge, M., Kauzlaric, M., Siber, R., Schönenberger, U., Horton, P., Schwanbeck, J., Floriancic, M. G., Viviroli, D., 
-        Wilhelm, S., Sikorska-Senoner, A. E., Addor, N., Brunner, M., Pool, S., Zappa, M., and Fenicia, F.: CAMELS-CH: hydro-meteorological 
-        time series and landscape attributes for 331 catchments in hydrologic Switzerland, Earth Syst. Sci. Data, 15, 5755–5784, 
-        https://doi.org/10.5194/essd-15-5755-2023, 2023. 
+    .. [1] Höge, M., Kauzlaric, M., Siber, R., Schönenberger, U., Horton, P., Schwanbeck, J., Floriancic, M. G.,
+        Viviroli, D., Wilhelm, S., Sikorska-Senoner, A. E., Addor, N., Brunner, M., Pool, S., Zappa, M., and
+        Fenicia, F.: CAMELS-CH: hydro-meteorological time series and landscape attributes for 331 catchments in
+        hydrologic Switzerland, Earth Syst. Sci. Data, 15, 5755–5784, https://doi.org/10.5194/essd-15-5755-2023, 2023.
 
     """
 
@@ -67,8 +67,9 @@ class CAMELS_CH(BaseDataset):
         dfs = []
         # Read each CSV file into a DataFrame and store it in list
         for file in read_files:
-            df = pd.read_csv(file, skiprows=1, header=0, encoding_errors="ignore",
-                             dtype={"gauge_id": str}).set_index("gauge_id")
+            df = pd.read_csv(file, skiprows=1, header=0, encoding_errors="ignore", dtype={"gauge_id": str}).set_index(
+                "gauge_id"
+            )
             dfs.append(df)
 
         # Join all dataframes
@@ -98,7 +99,9 @@ class CAMELS_CH(BaseDataset):
             Dataframe with the catchments` timeseries
 
         """
-        path_timeseries = self.cfg.path_data / "timeseries" / "observation_based" / f"CAMELS_CH_obs_based_{catch_id}.csv" #self.cfg.path_data 
+        path_timeseries = (
+            self.cfg.path_data / "timeseries" / "observation_based" / f"CAMELS_CH_obs_based_{catch_id}.csv"
+        )
         # load time series
         df = pd.read_csv(path_timeseries, index_col="date", parse_dates=["date"])
         return df
