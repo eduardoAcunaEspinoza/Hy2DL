@@ -11,9 +11,14 @@ To add this dataset to the library, use the following folder structure:
 ```
 CAMELS_CH/
   static_attributes/
-  
-
-
+    CAMELS_CH_climate_attributes_obs.csv
+    CAMELS_CH_geology_attributes.csv
+  ...
+  timeseries/
+    observation_based/
+      CAMELS_CH_obs_based_2004.csv
+      CAMELS_CH_obs_based_2007.csv
+    ...
 ```
 
 ### CAMELS_DE
@@ -24,14 +29,10 @@ To add this dataset to the library, use the following folder structure:
 ```
 CAMELS_DE/
   timeseries/ 
-  CAMELS_CH_climate_attributes_obs.csv
-  CAMELS_CH_geology_attributes.csv
+  CAMELS_DE_climatic_attributes.csv
+  CAMELS_DE_humaninfluence_attributes.csv
   ...
-  timeseries/
-    observation_based/
-    CAMELS_CH_obs_based_2004.csv
-    CAMELS_CH_obs_based_2007.csv
-    ...
+  CAMELS_DE_xxx_attributes.csv
 ```
 
 ### CAMELS_GB
