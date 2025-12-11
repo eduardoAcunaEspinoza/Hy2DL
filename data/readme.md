@@ -3,6 +3,24 @@ Datasets: Folder Structure and Preparation
 
 In the following, we present the folder structure required to use the different datasets with **Hy²DL**.
 
+### CAMELS_CH
+
+The CAMELS_CH dataset can be downloaded from [Zenodo](https://zenodo.org/records/15025258). 
+To add this dataset to the library, use the following folder structure:
+
+```
+CAMELS_CH/
+  static_attributes/
+    CAMELS_CH_climate_attributes_obs.csv
+    CAMELS_CH_geology_attributes.csv
+  ...
+  timeseries/
+    observation_based/
+      CAMELS_CH_obs_based_2004.csv
+      CAMELS_CH_obs_based_2007.csv
+    ...
+```
+
 ### CAMELS_DE
 
 The CAMELS_DE dataset can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.16755906).
