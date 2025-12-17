@@ -8,7 +8,7 @@ dynamic_input:
 - temperature_min
 - temperature_max
 target:
-- discharge_spec
+- discharge_spec_obs
 static_input:
 - area
 - elev_mean

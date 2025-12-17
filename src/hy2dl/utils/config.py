@@ -1,7 +1,7 @@
 import os
 import random
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Dict, Union
 
 import numpy as np
 import torch
@@ -254,7 +254,43 @@ class Config(object):
             "activation": embedding.get("activation", "relu"),
             "dropout": embedding.get("dropout", 0.0),
         }
+    
+    def as_dict(self) -> dict:
+        """Return run configuration as dictionary.
+        
+        Returns
+        -------
+        dict
+            The run configuration, as defined in the .yml file.
+        """
+        return self._cfg
+    
+    def update_config(self, yml_path_or_dict: Union[Path, dict], dev_mode: bool = False):
+        """Update config arguments.
+        
+        Useful e.g. in the context of fine-tuning or when continuing to train from a checkpoint to adapt for example the
+        learning rate, train basin files or anything else.
+        
+        Parameters
+        ----------
+        yml_path_or_dict : Union[Path, dict]
+            Either a path to the new config file or a dictionary of configuration values. Each argument specified in
+            this file will overwrite the existing config argument.
+        dev_mode : bool, optional
+            If dev_mode is off, the config creation will fail if there are unrecognized keys in the passed config
+            specification. dev_mode can be activated either through this parameter or by setting ``dev_mode: True``
+            in `yml_path_or_dict`.
 
+        Raises
+        ------
+        ValueError
+            If the passed configuration specification is neither a Path nor a dict, or if `dev_mode` is off (default)
+            and the config file or dict contain unrecognized keys.
+        """
+        new_config = Config(yml_path_or_dict, dev_mode=dev_mode)
+
+        self._cfg.update(new_config.as_dict())
+    
     # -----------------
     # From this point forward, we define properties to access the configuration values.
     # -----------------
@@ -537,3 +573,36 @@ class Config(object):
     @property
     def validation_period(self) -> list[str]:
         return self._cfg.get("validation_period")
+    
+    @property
+    def pre_trained_path(self) -> Path:
+        path = self._cfg.get("pre_trained_path")
+        return Path(path) if path else None
+    
+    @property
+    def finetune_modules(self) -> Union[list[str], Dict[str, str]]:
+        finetune_modules = self._cfg.get("finetune_modules", [])
+        if finetune_modules is None:
+            return []
+        elif isinstance(finetune_modules, str):
+            return [finetune_modules]
+        elif isinstance(finetune_modules, dict) or isinstance(finetune_modules, list):
+            return finetune_modules
+        else:
+            raise ValueError(f"Unknown data type {type(finetune_modules)} for 'finetune_modules' argument.")
+        
+    @property
+    def is_finetuning(self) -> bool:
+        return self._cfg.get("is_finetuning", False)
+
+    @is_finetuning.setter
+    def is_finetuning(self, flag: bool):
+        self._cfg["is_finetuning"] = flag
+
+    @property
+    def load_pretrained_scaler(self) -> bool:
+        return self._cfg.get("load_pretrained_scaler", True)
+
+    @load_pretrained_scaler.setter
+    def load_pretrained_scaler(self, flag: bool):
+        self._cfg["load_pretrained_scaler"] = flag
