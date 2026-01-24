@@ -217,10 +217,17 @@ class Config(object):
             return device.lower()
 
         elif device.lower() == "gpu":
-            if not torch.cuda.is_available():
-                raise RuntimeError("CUDA requested but no CUDA devices available.")
+            if torch.cuda.is_available():
+                return "cuda:0"
+            elif torch.backends.mps.is_available():
+                return "mps"
+            else:
+                raise RuntimeError("GPU requested but no CUDA or MPS devices available.")
 
-            return "cuda:0"  # Default to the first CUDA device
+        elif device.lower() == "mps":
+            if not torch.backends.mps.is_available():
+                raise RuntimeError("MPS requested but not available.")
+            return "mps"
 
         elif device.lower().startswith("cuda"):
             if not torch.cuda.is_available():
@@ -241,7 +248,7 @@ class Config(object):
 
         else:
             print(
-                f"Invalid device specification: '{device}'. Expected 'cpu', 'gpu' or "
+                f"Invalid device specification: '{device}'. Expected 'cpu', 'gpu', 'mps' or "
                 f"'cuda[:<index>]'. CPU will be used by default."
             )
             return "cpu"
