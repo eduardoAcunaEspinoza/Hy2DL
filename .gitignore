@@ -5,6 +5,7 @@ docs/build/*
 experiments
 results/*
 benchmarks/*/
+data/*
 
 # File extensions
 **/*.pyc

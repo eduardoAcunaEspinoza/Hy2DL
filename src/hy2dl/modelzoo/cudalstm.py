@@ -17,6 +17,9 @@ class CudaLSTM(nn.Module):
         Configuration object containing model hyperparameters and settings.
     """
 
+    # specify sub-modules of the model that can later be used for finetuning.
+    module_parts = ['embedding_hindcast', 'lstm', 'linear']   # TL add it
+
     def __init__(self, cfg: Config):
         super().__init__()
 

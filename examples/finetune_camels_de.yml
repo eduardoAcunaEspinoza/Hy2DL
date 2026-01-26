@@ -1,0 +1,12 @@
+experiment_name: finetune_camels_de
+path_entities: ../data/basin_id/basins_camels_de_2.txt
+pre_trained_path: ../results/LSTM_CAMELS_DE_seed_110
+learning_rate:
+  1: 0.001
+  3: 0.0001
+epochs: 5
+finetune_modules:
+- lstm
+- linear
+load_pretrained_scaler: True
+is_finetuning: True
