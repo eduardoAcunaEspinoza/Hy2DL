@@ -15,7 +15,7 @@ class Hourly_CAMELS_US(CAMELS_US):
     information from the CAMELS_US dataset and upsample it to hourly. Moreover, we can read the static attributes
     using the function defined in the CAMELS_US class.
 
-    This class and its methods were adapted from Neural Hydrology [3]_.
+    This class was adapted from NeuralHydrology  [3]_.
 
     Parameters
     ----------
@@ -23,11 +23,8 @@ class Hourly_CAMELS_US(CAMELS_US):
         Configuration file.
     time_period : {'training', 'validation', 'testing'}
         Defines the period for which the data will be loaded.
-    check_NaN : Optional[bool], default=True
-        Whether to check for NaN values while processing the data. This should typically be True during training,
-        and can be set to False during evaluation (validation/testing).
-    entity : Optional[str], default=None
-        ID of the entity (e.g., single catchment's ID) to be analyzed
+    gauge_id : Optional[str | list[str]], default=None
+        Id of gauge(s) to be loaded.
 
     References
     ----------
@@ -48,23 +45,17 @@ class Hourly_CAMELS_US(CAMELS_US):
         self,
         cfg: Config,
         time_period: str,
-        check_NaN: Optional[bool] = True,
-        entities_ids: Optional[str | list[str]] = None,
+        gauge_id: Optional[str | list[str]] = None,
     ):
         # Run the __init__ method of CAMELS_US class
-        super(Hourly_CAMELS_US, self).__init__(
-            cfg=cfg,
-            time_period=time_period,
-            check_NaN=check_NaN,
-            entities_ids=entities_ids,
-        )
+        super(Hourly_CAMELS_US, self).__init__(cfg=cfg, time_period=time_period, gauge_id=gauge_id)
 
-    def _read_data(self, catch_id: str) -> pd.DataFrame:
+    def _read_data(self, gauge_id: str) -> pd.DataFrame:
         """Read a specific catchment timeseries into a dataframe.
 
         Parameters
         ----------
-        catch_id : str
+        gauge_id : str
             8-digit USGS identifier of the basin.
 
         Returns
@@ -76,10 +67,10 @@ class Hourly_CAMELS_US(CAMELS_US):
         dfs = []
         for forcing in self.cfg.forcings:
             if forcing[-7:] == "_hourly":
-                df = self._load_hourly_data(catch_id=catch_id, forcing=forcing)
+                df = self._load_hourly_data(gauge_id=gauge_id, forcing=forcing)
             else:
                 # load daily CAMELS forcings and upsample to hourly
-                df, _ = self._load_camelsus_data(catch_id=catch_id, forcing=forcing)
+                df, _ = self._load_camelsus_data(gauge_id=gauge_id, forcing=forcing)
                 df = df.resample("1h").ffill()
             if len(self.cfg.forcings) > 1:
                 # rename columns
@@ -89,16 +80,16 @@ class Hourly_CAMELS_US(CAMELS_US):
         df = pd.concat(dfs, axis=1)
 
         # Read discharges and add them to current dataframe
-        df = df.join(self._load_hourly_discharge(catch_id=catch_id))
+        df = df.join(self._load_hourly_discharge(gauge_id=gauge_id))
 
         return df
 
-    def _load_hourly_data(self, catch_id: str, forcing: str) -> pd.DataFrame:
+    def _load_hourly_data(self, gauge_id: str, forcing: str) -> pd.DataFrame:
         """Read a specific catchment forcing timeseries
 
         Parameters
         ----------
-        catch_id : str
+        gauge_id : str
             8-digit USGS identifier of the basin.
         forcing : str
             e.g. ndlas_hourly'
@@ -109,18 +100,18 @@ class Hourly_CAMELS_US(CAMELS_US):
             Dataframe with the catchments` timeseries
 
         """
-        path_timeseries = self.cfg.path_data / "hourly" / f"{forcing}" / f"{catch_id}_hourly_nldas.csv"
+        path_timeseries = self.cfg.path_data / "hourly" / f"{forcing}" / f"{gauge_id}_hourly_nldas.csv"
         # load time series
         df = pd.read_csv(path_timeseries, index_col=["date"], parse_dates=["date"])
 
         return df
 
-    def _load_hourly_discharge(self, catch_id: str) -> pd.DataFrame:
+    def _load_hourly_discharge(self, gauge_id: str) -> pd.DataFrame:
         """Read a specific catchment discharge timeseries
 
         Parameters
         ----------
-        catch_id : str
+        gauge_id : str
             8-digit USGS identifier of the basin.
 
         Returns
@@ -130,7 +121,7 @@ class Hourly_CAMELS_US(CAMELS_US):
 
         """
         # Create a path to read the data
-        streamflow_path = self.cfg.path_data / "hourly/usgs_streamflow" / f"{catch_id}-usgs-hourly.csv"
+        streamflow_path = self.cfg.path_data / "hourly/usgs_streamflow" / f"{gauge_id}-usgs-hourly.csv"
 
         # load time series
         df = pd.read_csv(streamflow_path, index_col=["date"], parse_dates=["date"])

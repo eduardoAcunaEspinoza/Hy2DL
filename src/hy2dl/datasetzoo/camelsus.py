@@ -14,7 +14,7 @@ class CAMELS_US(BaseDataset):
     The class inherits from BaseDataset to execute the operations on how to load and process the data. However here we
     code the _read_attributes and _read_data methods, that specify how we should read the information from CAMELS-US.
 
-    This class and its methods were adapted from Neural Hydrology [3]_.
+    This class was adapted from NeuralHydrology [3]_.
 
     Parameters
     ----------
@@ -22,11 +22,8 @@ class CAMELS_US(BaseDataset):
         Configuration file.
     time_period : {'training', 'validation', 'testing'}
         Defines the period for which the data will be loaded.
-    check_NaN : Optional[bool], default=True
-        Whether to check for NaN values while processing the data. This should typically be True during training,
-        and can be set to False during evaluation (validation/testing).
-    entity : Optional[str], default=None
-        ID of the entity (e.g., single catchment's ID) to be analyzed
+    gauge_id : Optional[str | list[str]], default=None
+        Id of gauge(s) to be loaded.
 
 
     References
@@ -48,16 +45,10 @@ class CAMELS_US(BaseDataset):
         self,
         cfg: Config,
         time_period: str,
-        check_NaN: Optional[bool] = True,
-        entities_ids: Optional[str | list[str]] = None,
+        gauge_id: Optional[str | list[str]] = None,
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
-        super(CAMELS_US, self).__init__(
-            cfg=cfg,
-            time_period=time_period,
-            check_NaN=check_NaN,
-            entities_ids=entities_ids,
-        )
+        super(CAMELS_US, self).__init__(cfg=cfg, time_period=time_period, gauge_id=gauge_id)
 
     def _read_attributes(self) -> pd.DataFrame:
         """Read the catchments` attributes
@@ -90,16 +81,16 @@ class CAMELS_US(BaseDataset):
                 df[column], _ = pd.factorize(df[column], sort=True)
 
         # Filter attributes and basins of interest
-        df = df.loc[self.entities_ids, self.cfg.static_input]
+        df = df.loc[self.gauge_id, self.cfg.static_input]
 
         return df
 
-    def _read_data(self, catch_id: str) -> pd.DataFrame:
+    def _read_data(self, gauge_id: str) -> pd.DataFrame:
         """Read a specific catchment timeseries into a dataframe.
 
         Parameters
         ----------
-        catch_id : str
+        gauge_id : str
             8-digit USGS identifier of the basin.
 
         Returns
@@ -111,7 +102,7 @@ class CAMELS_US(BaseDataset):
         # Read forcings
         dfs = []
         for forcing in self.cfg.forcings:  # forcings can be daymet, maurer or nldas
-            df, area = self._load_camelsus_data(catch_id=catch_id, forcing=forcing)
+            df, area = self._load_camelsus_data(gauge_id=gauge_id, forcing=forcing)
             # rename columns in case there are multiple forcings
             if len(self.cfg.forcings) > 1:
                 df = df.rename(columns={col: f"{col}_{forcing}" for col in df.columns})
@@ -121,19 +112,19 @@ class CAMELS_US(BaseDataset):
         df = pd.concat(dfs, axis=1)  # dataframe with all the dynamic forcings
 
         # Read discharges and add them to current dataframe
-        df["QObs(mm/d)"] = self._load_camelsus_discharge(catch_id=catch_id, area=area)
+        df["QObs(mm/d)"] = self._load_camelsus_discharge(gauge_id=gauge_id, area=area)
 
         # replace invalid discharge values by NaNs
         df["QObs(mm/d)"] = df["QObs(mm/d)"].apply(lambda x: np.nan if x < 0 else x)
 
         return df
 
-    def _load_camelsus_data(self, catch_id: str, forcing: str) -> Tuple[pd.DataFrame, int]:
+    def _load_camelsus_data(self, gauge_id: str, forcing: str) -> Tuple[pd.DataFrame, int]:
         """Read a specific catchment forcing timeseries
 
         Parameters
         ----------
-        catch_id : str
+        gauge_id : str
             8-digit USGS identifier of the basin.
         forcing : str
             Can be e.g. 'daymet' or 'nldas', etc. Must match the folder names in the 'basin_mean_forcing' directory.
@@ -148,7 +139,7 @@ class CAMELS_US(BaseDataset):
         """
         # Create a path to read the data
         forcing_path = self.cfg.path_data / "basin_mean_forcing" / forcing
-        file_path = list(forcing_path.glob(f"**/{catch_id}_*_forcing_leap.txt"))
+        file_path = list(forcing_path.glob(f"**/{gauge_id}_*_forcing_leap.txt"))
         file_path = file_path[0]
         # Read dataframe
         with open(file_path, "r") as fp:
@@ -167,12 +158,12 @@ class CAMELS_US(BaseDataset):
 
         return df, area
 
-    def _load_camelsus_discharge(self, catch_id: str, area: int) -> pd.DataFrame:
+    def _load_camelsus_discharge(self, gauge_id: str, area: int) -> pd.DataFrame:
         """Read a specific catchment discharge timeseries
 
         Parameters
         ----------
-        catch_id : str
+        gauge_id : str
             8-digit USGS identifier of the basin.
         area : int
             Catchment area (m2), used to normalize the discharge.
@@ -185,7 +176,7 @@ class CAMELS_US(BaseDataset):
         """
         # Create a path to read the data
         streamflow_path = self.cfg.path_data / "usgs_streamflow"
-        file_path = list(streamflow_path.glob(f"**/{catch_id}_streamflow_qc.txt"))
+        file_path = list(streamflow_path.glob(f"**/{gauge_id}_streamflow_qc.txt"))
         file_path = file_path[0]
 
         col_names = ["basin", "Year", "Mnth", "Day", "QObs", "flag"]

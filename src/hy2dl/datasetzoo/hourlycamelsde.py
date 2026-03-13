@@ -20,12 +20,9 @@ class Hourly_CAMELS_DE(CAMELS_DE):
      cfg : Config
          Configuration file.
      time_period : {'training', 'validation', 'testing'}
-         Defines the period for which the data will be loaded.
-     check_NaN : Optional[bool], default=True
-         Whether to check for NaN values while processing the data. This should typically be True during training,
-         and can be set to False during evaluation (validation/testing).
-     entity : Optional[str], default=None
-         ID of the entity (e.g., single catchment's ID) to be analyzed
+         Defines the period for which the data will be loaded..
+    gauge_id : Optional[str | list[str]], default=None
+        Id of gauge(s) to be loaded.
 
     """
 
@@ -33,23 +30,17 @@ class Hourly_CAMELS_DE(CAMELS_DE):
         self,
         cfg: Config,
         time_period: str,
-        check_NaN: Optional[bool] = True,
-        entities_ids: Optional[str | list[str]] = None,
+        gauge_id: Optional[str | list[str]] = None,
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
-        super(Hourly_CAMELS_DE, self).__init__(
-            cfg=cfg,
-            time_period=time_period,
-            check_NaN=check_NaN,
-            entities_ids=entities_ids,
-        )
+        super(Hourly_CAMELS_DE, self).__init__(cfg=cfg, time_period=time_period, gauge_id=gauge_id)
 
-    def _read_data(self, catch_id: str) -> pd.DataFrame:
+    def _read_data(self, gauge_id: str) -> pd.DataFrame:
         """Read the catchments` timeseries
 
         Parameters
         ----------
-        catch_id : str
+        gauge_id : str
             identifier of the basin.
 
         Returns
@@ -59,15 +50,16 @@ class Hourly_CAMELS_DE(CAMELS_DE):
 
         """
         # Read hourly data
-        path_timeseries = self.cfg.path_data / "hourly" / f"CAMELS_DE_1h_hydromet_timeseries_{catch_id}.csv"
+        path_timeseries = self.cfg.path_data / "hourly" / f"CAMELS_DE_1h_hydromet_timeseries_{gauge_id}.csv"
         # load time series
         df_hourly = pd.read_csv(path_timeseries, index_col="time", parse_dates=["time"])
+        df_hourly.index = df_hourly.index.tz_localize(None)
 
         # Fill gaps in the precipitation column
         df_hourly = self._fill_precipitation_gaps(df=df_hourly)
 
         # Load variables from CAMELS DE (daily) and resample
-        path_daily_timeseries = self.cfg.path_data / "timeseries" / f"CAMELS_DE_hydromet_timeseries_{catch_id}.csv"
+        path_daily_timeseries = self.cfg.path_data / "timeseries" / f"CAMELS_DE_hydromet_timeseries_{gauge_id}.csv"
         df_resampled = pd.read_csv(path_daily_timeseries, index_col="date", parse_dates=["date"])
         df_resampled = df_resampled.loc[:, "precipitation_mean"].resample("1h").ffill() / 24
         df_resampled = df_resampled.loc[df_hourly.index.intersection(df_resampled.index)]

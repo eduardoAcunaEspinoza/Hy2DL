@@ -1,7 +1,9 @@
 # import necessary packages
 from typing import Optional
+
 import pandas as pd
-from hy2dl.datasetzoo.basedataset import BaseDataset
+
+from hy2dl.datasetzoo.old_basedataset import BaseDataset
 from hy2dl.utils.config import Config
 
 
@@ -12,7 +14,7 @@ class CARAVAN(BaseDataset):
     code the _read_attributes and _read_data methods, that specify how we should read the information from Caravan.
     The code would also run with user created datasets which conform to the Caravan style convention.
 
-    This class and its methods were adapted from Neural Hydrology [2]_.
+    This class was adapted from NeuralHydrology [2]_.
 
     Parameters
     ----------
@@ -20,11 +22,8 @@ class CARAVAN(BaseDataset):
         Configuration file.
     time_period : {'training', 'validation', 'testing'}
         Defines the period for which the data will be loaded.
-    check_NaN : Optional[bool], default=True
-        Whether to check for NaN values while processing the data. This should typically be True during training,
-        and can be set to False during evaluation (validation/testing).
-    entity : Optional[str], default=None
-        ID of the entity (e.g., single catchment's ID) to be analyzed
+    gauge_id : Optional[str | list[str]], default=None
+        Id of gauge(s) to be loaded.
 
     References
     ----------
@@ -39,16 +38,10 @@ class CARAVAN(BaseDataset):
         self,
         cfg: Config,
         time_period: str,
-        check_NaN: Optional[bool] = True,
-        entities_ids: Optional[str | list[str]] = None,
+        gauge_id: Optional[str | list[str]] = None,
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
-        super(CARAVAN, self).__init__(
-            cfg=cfg,
-            time_period=time_period,
-            check_NaN=check_NaN,
-            entities_ids=entities_ids,
-        )
+        super(CARAVAN, self).__init__(cfg=cfg, time_period=time_period, gauge_id=gauge_id)
 
     def _read_attributes(self) -> pd.DataFrame:
         """Read the catchments` attributes from Caravan
@@ -87,11 +80,11 @@ class CARAVAN(BaseDataset):
                 df_attributes[column], _ = pd.factorize(df_attributes[column], sort=True)
 
         # Filter attributes and basins of interest
-        df_attributes = df_attributes.loc[self.entities_ids, self.cfg.static_input]
+        df_attributes = df_attributes.loc[self.gauge_id, self.cfg.static_input]
 
         return df_attributes
 
-    def _read_data(self, catch_id: str) -> pd.DataFrame:
+    def _read_data(self, gauge_id: str) -> pd.DataFrame:
         """Loads the timeseries data of one basin from the Caravan dataset.
 
         Parameters
@@ -99,7 +92,7 @@ class CARAVAN(BaseDataset):
         data_dir : Path
             Path to the root directory of Caravan that has to include a sub-directory called 'timeseries'. This
             sub-directory has to contain another sub-directory called 'csv'.
-        basin : str
+        gauge_id : str
             The Caravan gauge id string in the form of {subdataset_name}_{gauge_id}.
 
         Returns
@@ -108,7 +101,7 @@ class CARAVAN(BaseDataset):
             Dataframe with the catchments` timeseries
         """
         data_dir = self.cfg.path_data
-        basin = catch_id
+        basin = gauge_id
 
         # Get the subdataset name from the basin string.
         subdataset_name = basin.split("_")[0].lower()

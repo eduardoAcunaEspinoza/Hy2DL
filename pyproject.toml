@@ -10,14 +10,17 @@ authors = [
     {name = "Manuel Álvarez Chaves", email = "manuel.alvarez-chaves@simtech.uni-stuttgart.de"}
 ]
 
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
+    "dask[complete]>=2026.1.0",
     "numpy>=2.2.0",
     "pandas>=2.2.0",
     "pyyaml>=6.0.2",
     "torch>=2.2.1",
     "tqdm>=4.67.1",
-    "xarray[io]>=2025.6.1",
+    "xarray-tensorstore>=0.3.0",
+    "xarray[io]>=2026.1.0",
+    "zarr>=2.18.0,<3.0.0",
 ]
 
 [dependency-groups]
