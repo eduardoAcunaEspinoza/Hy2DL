@@ -1,3 +1,5 @@
+import datetime
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -96,12 +98,6 @@ class BaseDataset(Dataset):
         ):
             self.merge_forecast_signal = True
 
-        ## ------------------------------------------------------
-        ## Process static attributes
-        ## ------------------------------------------------------
-        if self.cfg.static_input:
-            self.ds_attributes = self._read_attributes().to_xarray()
-
         ### -----------------------------------------------
         ### Read sample dataset to get metadata of interest
         ### -----------------------------------------------
@@ -130,9 +126,10 @@ class BaseDataset(Dataset):
             dict.fromkeys(self.hindcast_input + self.pseudo_forecast_input + self.cfg.target + additional_flag)
         )
 
-        # Initialized memory-related variables
+        # Initialized variables
         self.dataset_in_ram = False
         self.fc_in_ram = False
+        self.basin_std = None
 
     def __len__(self):
         return self.valid_samples.shape[0]
@@ -326,7 +323,7 @@ class BaseDataset(Dataset):
         # Static input
         # --------------------------
         if self.cfg.static_input:
-            sample["x_s"] = torch.from_numpy(self.ds_attributes.sel(gauge_id=id).to_array().values).T.float()
+            sample["x_s"] = self.ds_attributes[id_idx_hc]
 
         # --------------------------
         # Target
@@ -410,10 +407,11 @@ class BaseDataset(Dataset):
         # Additional metadata
         # --------------------------
         sample["gauge_id"] = id
-
         end_dates = date + np.timedelta64(self.cfg.seq_length_forecast, self.data_freq)
         offsets = np.arange(-self.cfg.predict_last_n + 1, 1) * np.timedelta64(1, self.data_freq)
         sample["date"] = end_dates[:, None] + offsets
+        if self.basin_std:
+            sample["std_basin"] = self.basin_std[id_idx_hc]
 
         return sample
 
@@ -429,7 +427,9 @@ class BaseDataset(Dataset):
             Hydrology and Earth System Sciences*, 2019, 23, 5089-5110, doi:10.5194/hess-23-5089-2019
 
         """
-        self.basin_std = self.ds_ts.sel(feature=self.cfg.target).std(dim=["date"])
+        basin_std = self.ds_ts["data"].sel(feature=self.cfg.target).std(dim=["date"])
+        self.basin_std = torch.tensor(basin_std.values, dtype=torch.float32)
+        self.basin_std.share_memory_()
 
     def calculate_scaler(self, save_scaler: bool = True):
         """Calculate statistics of data.
@@ -493,8 +493,8 @@ class BaseDataset(Dataset):
             if self.cfg.static_input:  # Update scaler dictionary with static attributes if applicable
                 scaler.update(
                     {
-                        "xs_mean": self.scaler_attributes.sel(statistic="mean").to_pandas().to_dict(),
-                        "xs_std": self.scaler_attributes.sel(statistic="std").to_pandas().to_dict(),
+                        "xs_mean": self.scaler_attributes.sel(statistic="mean").to_pandas()["data"].to_dict(),
+                        "xs_std": self.scaler_attributes.sel(statistic="std").to_pandas()["data"].to_dict(),
                     }
                 )
 
@@ -514,6 +514,8 @@ class BaseDataset(Dataset):
         - Data Variables:
             - data (gauge_id, date, feature): The primary data values stored as a float array.
 
+        It also process the static attributes.
+
         Parameters
         ----------
         save_dataset: bool, default=False
@@ -522,10 +524,11 @@ class BaseDataset(Dataset):
 
         Note: Because this function builds the entire dataset in RAM, you must have enough memory to hold the processed
         data. If your dataset exceeds available RAM, use `create_zarr_dataset()` to write directly to disk and
-        `load_dataset_from_zarr` (together with configuration argument dataset_in_ram: False) to load it lazily.
+        `load_dataset` (together with configuration argument dataset_in_ram: False) to load it lazily.
 
         """
-        self.cfg.logger.info("Creating dataset in memory...")
+        self.cfg.logger.info(f"Creating {self.period} dataset in memory...")
+        processing_time = time.time()
         # Get metadata (dates and features) from a sample to pre-allocate memory
         dates = pd.date_range(start=self.warmup_start_date, end=self.end_date, freq=self.data_freq)
         features = self.variables_of_interest
@@ -556,12 +559,20 @@ class BaseDataset(Dataset):
         )
 
         self.dataset_in_ram = True
-        self.cfg.logger.info("Dataset created successfully")
+        self.cfg.logger.info("Dataset created successfully.")
+        self.cfg.logger.info(
+            f"Time required to process {self.ds_ts.sizes['gauge_id']} gauges: "
+            f"{datetime.timedelta(seconds=int(time.time() - processing_time))}"
+        )
+
         if save_dataset:
             self.path_dataset = getattr(self.cfg, f"path_dataset_{self.period}")
             chunked_ds = self.ds_ts.chunk({"gauge_id": 1, "date": -1, "feature": -1})
             chunked_ds.to_zarr(self.path_dataset, mode="w", consolidated=True)
             self.cfg.logger.info(f"Dataset saved at {self.path_dataset}")
+
+        # Process static attributes
+        self._process_attributes()
 
     def create_zarr_dataset(self):
         """Creates the dataset and writes it directly to a zarr file on disk.
@@ -581,6 +592,7 @@ class BaseDataset(Dataset):
 
         """
         self.cfg.logger.info("Creating zarr dataset...")
+        processing_time = time.time()
         # Initialize zarr structure to store the processed results
         self.path_dataset = getattr(self.cfg, f"path_dataset_{self.period}")
         self._initialize_zarr()
@@ -600,8 +612,12 @@ class BaseDataset(Dataset):
 
         zarr.consolidate_metadata(self.path_dataset)  # consolidate metadata to optimize read performance
         self.cfg.logger.info(f"Dataset created successfully. Zarr file can be found at {self.path_dataset}")
+        self.cfg.logger.info(
+            f"Time required to process {len(self.gauge_id)} gauges: "
+            f"{datetime.timedelta(seconds=int(time.time() - processing_time))}"
+        )
 
-    def load_dataset_from_zarr(self):
+    def load_dataset(self):
         """Loads an existing zarr dataset from disk.
 
         This function opens a zarr dataset (lazily by default using `xarray_tensorstore`) and filters it to include only
@@ -619,6 +635,8 @@ class BaseDataset(Dataset):
             - feature: Variables of interest
         - Data Variables:
             - data (gauge_id, date, feature): The primary data values stored as a float32 array.
+
+        It also process the static attributes.
 
         """
         self.cfg.logger.info("Loading dataset from zarr...")
@@ -646,7 +664,10 @@ class BaseDataset(Dataset):
             self.dataset_in_ram = False
             self.cfg.logger.info("Dataset is loaded, in lazy mode, from disk.")
 
-    def load_forecast_dataset_from_zarr(self):
+        # Process static attributes
+        self._process_attributes()
+
+    def load_forecast_dataset(self):
         """Load forecast dataset from zarr file.
 
         This function opens a zarr dataset (lazily by default using `xarray_tensorstore`) and filters it to include only
@@ -717,26 +738,32 @@ class BaseDataset(Dataset):
         # ----------------------------------
         # Build scaler for forecast
         # ----------------------------------
-        fc_keys = list(scaler["xfc_mean"].keys())
-        fc_means = [scaler["xfc_mean"][k] for k in fc_keys]
-        fc_stds = [scaler["xfc_std"][k] for k in fc_keys]
+        if self.cfg.forecast_input:
+            fc_keys = list(scaler["xfc_mean"].keys())
+            fc_means = [scaler["xfc_mean"][k] for k in fc_keys]
+            fc_stds = [scaler["xfc_std"][k] for k in fc_keys]
 
-        da = xr.DataArray(
-            np.stack([fc_means, fc_stds], axis=0),
-            coords={"statistic": ["mean", "std"], "feature": fc_keys},
-            dims=("statistic", "feature"),
-        )
-        self.scaler_fc = da.to_dataset(name="data")
+            da = xr.DataArray(
+                np.stack([fc_means, fc_stds], axis=0),
+                coords={"statistic": ["mean", "std"], "feature": fc_keys},
+                dims=("statistic", "feature"),
+            )
+            self.scaler_fc = da.to_dataset(name="data")
 
         # ----------------------------------
         # Build scaler for static attributes
         # ----------------------------------
         if self.cfg.static_input:
-            stat_keys = list(scaler["xs_mean"].keys())
-            self.scaler_attributes = xr.Dataset(
-                data_vars={key: (("statistic",), [scaler["xs_mean"][key], scaler["xs_std"][key]]) for key in stat_keys},
-                coords={"statistic": ["mean", "std"]},
+            xs_keys = list(scaler["xs_mean"].keys())
+            xs_means = [scaler["xs_mean"][k] for k in fc_keys]
+            xs_stds = [scaler["xs_std"][k] for k in fc_keys]
+
+            da = xr.DataArray(
+                np.stack([xs_means, xs_stds], axis=0),
+                coords={"statistic": ["mean", "std"], "feature": xs_keys},
+                dims=("statistic", "feature"),
             )
+            self.scaler_attributes = da.to_dataset(name="data")
 
     def load_valid_samples(self, path_valid_samples: Path | str):
         """Load valid samples.
@@ -761,12 +788,11 @@ class BaseDataset(Dataset):
         # Map valid samples to their corresponding indexes in the zarr structure for faster access in getitem
         self._map_indexes()
 
-    def prepared_tensors(self):
+    def prepare_tensors(self):
         """Converts xarray to shared memory tensors if the dataset is in RAM.
 
         This method should be called AFTER:
-        - creating (`create_dataset`) or loading (`load_dataset_from_zarr` and `load_forecast_dataset_from_zarr`) the
-        dataset
+        - creating (`create_dataset`) or loading (`load_dataset` and `load_forecast_dataset`) the dataset
         - standardizing the data (`calculate_scaler` or`load_scaler` and `standardize_data`)
         - validating the samples (`validate_samples` or`load_valid_samples`).
 
@@ -782,6 +808,10 @@ class BaseDataset(Dataset):
         if self.fc_in_ram:
             self.ds_fc = torch.from_numpy(self.ds_fc["data"].values).float()
             self.ds_fc.share_memory_()
+
+        if self.cfg.static_input:
+            self.ds_attributes = torch.from_numpy(self.ds_attributes["data"].values).float()
+            self.ds_attributes.share_memory_()
 
         self.cfg.logger.info("Datasets have been moved to shared memory tensors.")
 
@@ -867,9 +897,7 @@ class BaseDataset(Dataset):
         self.valid_samples["source"] = valid_mask.source.values[source_indices]
         self.valid_samples = np.sort(self.valid_samples, order=["gauge_id", "date"])  # sort by gauge_id and date
 
-        self.cfg.logger.info(
-            f"Sample validation completed. Number of valid samples: {self.valid_samples.size:_}".replace("_", " ")
-        )
+        self.cfg.logger.info(f"Number of valid samples: {self.valid_samples.size:_}".replace("_", " "))
 
         if save_path:
             df = pd.DataFrame(self.valid_samples)
@@ -1077,6 +1105,16 @@ class BaseDataset(Dataset):
             return pd.to_datetime(date_str, format="%Y-%m-%d")
         elif freq == "h":
             return pd.to_datetime(date_str, format="%Y-%m-%d %H:%M:%S")
+
+    def _process_attributes(self):
+        if self.cfg.static_input:
+            ds_attributes = self._read_attributes().to_xarray()
+            self.ds_attributes = (
+                ds_attributes.reindex(gauge_id=self.ds_ts.gauge_id)
+                .to_array(dim="feature")
+                .transpose("gauge_id", "feature")
+                .to_dataset(name="data")
+            )
 
     def _process_df(self, gauge_id: str, extract_values: bool = False) -> pd.DataFrame | np.ndarray:
         """Read and process the data for a specific gauge_id (e.g., catchment).
@@ -1288,7 +1326,7 @@ class BaseDataset(Dataset):
         # -------------------------
         if self.cfg.static_input:
             # Check if any attribute is NaN for each id, if attr is invalid, the whole time series for that id is False
-            attr_mask = self.ds_attributes.to_array().notnull().all(dim="variable")
+            attr_mask = self.ds_attributes["data"].notnull().all(dim="feature")
             is_valid = is_valid & attr_mask
 
         # -------------------------

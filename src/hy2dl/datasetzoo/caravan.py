@@ -3,7 +3,7 @@ from typing import Optional
 
 import pandas as pd
 
-from hy2dl.datasetzoo.old_basedataset import BaseDataset
+from hy2dl.datasetzoo import BaseDataset
 from hy2dl.utils.config import Config
 
 

@@ -726,9 +726,5 @@ class Config(object):
         return self._cfg.get("validate_every", 1)
 
     @property
-    def validate_n_random_basins(self) -> int:
-        return self._cfg.get("validate_n_random_basins", 0)
-
-    @property
     def validation_period(self) -> list[str]:
         return self._cfg.get("validation_period")
