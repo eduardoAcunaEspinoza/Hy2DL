@@ -21,7 +21,7 @@ class Optimizer:
         if cfg.optimizer == "adam":
             optimizer_class = torch.optim.Adam
         else:
-            raise ValueError(f"Optimizer {cfg.optimizer} is not supported. Only 'adam' is currently available.")
+            raise ValueError(f"Optimizer {cfg.optimizer} is not supported. Currently only 'adam' is available.")
 
         if (  # if learning rate is a float and no scheduler is used
             isinstance(cfg.learning_rate, float) and cfg.steplr_step_size is None and cfg.steplr_gamma is None

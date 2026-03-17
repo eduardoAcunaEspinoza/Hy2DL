@@ -1,7 +1,7 @@
 import datetime
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import dask
 import numpy as np
@@ -154,7 +154,7 @@ class BaseDataset(Dataset):
             raise ValueError(f"Invalid index type: {type(idx)}. Expected int or list of ints.")
         return self.__getitems__(indices)
 
-    def __getitems__(self, indices: list[int]):
+    def __getitems__(self, indices: list[int]) -> dict[str, Any]:
         """Construct a data-sample that will be send to the model
 
         The function used vectorized logic to extract the required information to construct a data-sample. It supports
@@ -165,6 +165,45 @@ class BaseDataset(Dataset):
         idx: list[int]
             Indexes of the data-sample to extract. The indexes refers to the positions in the `self.valid_samples`
             table, which contains the (gauge_id, date, source) combinations, that can be used for training/evaluation.
+
+        Returns
+        -------
+        sample: dict[str, Any]
+            A dictionary containing the information that will be used to train the model. Elements of the dictionary
+            include:
+            - x_d: dict[str, torch.Tensor]
+                Dynamic inputs in hindcast period. Keys are the variable names and the values are tensors of shape
+                (B, S).In case of multiple frequencies, one dictionary per frequency is created.
+            - y_obs: torch.Tensor, shape (B, ST, N)
+                Target variables.
+            - x_s: Optional[torch.Tensor], shape (B, NS)
+                Static inputs.
+            - x_d_fc: Optional[dict[str, torch.Tensor]]
+                Dynamic inputs in forecast period. Keys are the variable names and the values are tensors of shape
+                (B, SF).
+            - source_fc: Optional[np.ndarray], shape (B,)
+                String array to differentiate the source of forecast signals: pseudoforecast ("obs") or forecast ("fc").
+            - init_time_fc: Optional[np.ndarray], shape (B,)
+                Time where the forecast is emitted.
+            - persistent_q: Optional[torch.Tensor], shape (B, 1, N)
+                Target at the time the forecast is emitted.
+            - gauge_id: np.ndarray, shape (B,)
+                ID of the gauge for each element of the batch.
+            - date: np.ndarray, shape (B, S)
+                Dates associated with the target.
+            - std_basin: Optional[torch.Tensor], shape (B, N)
+                Standard deviation of target variables for the training period. Necessary if one uses basin-averaged NSE
+                as a loss function.
+
+        Notes
+        -----
+        Shape abbreviations used:
+        - B: batch size
+        - S: sequence length hindcast period.
+        - ST: length of the target sequence, based on `predict_last_n` cofiguration argument
+        - SF: length of forecast period
+        - N: number of target variables
+        - NS: number of static inputs
 
         """
         sample = {}
@@ -209,8 +248,8 @@ class BaseDataset(Dataset):
             -------
             dict[str, torch.Tensor] or torch.Tensor
                 The extracted block, either as a dictionary or as a tensor
-                - dict: features names as keys, and values being the corresponding tensors of shape (batch, sequence)
-                - tensor: a single tensor of shape (batch, sequence, features)
+                - dict: features names as keys, and values being the corresponding tensors of shape (B, S)
+                - tensor: a single tensor of shape (B, S, F)
 
             """
             var_indices = [self.feature_to_idx["obs"][var] for var in var_list]
@@ -261,7 +300,7 @@ class BaseDataset(Dataset):
             Returns
             -------
             torch.Tensor
-                The extracted block (batch, sequence, features)
+                The extracted block (B, S, F)
 
             """
             var_indices = [self.feature_to_idx["fc"][var] for var in var_list]
@@ -410,7 +449,7 @@ class BaseDataset(Dataset):
         end_dates = date + np.timedelta64(self.cfg.seq_length_forecast, self.data_freq)
         offsets = np.arange(-self.cfg.predict_last_n + 1, 1) * np.timedelta64(1, self.data_freq)
         sample["date"] = end_dates[:, None] + offsets
-        if self.basin_std:
+        if torch.is_tensor(self.basin_std):
             sample["std_basin"] = self.basin_std[id_idx_hc]
 
         return sample
@@ -537,7 +576,10 @@ class BaseDataset(Dataset):
         data_array = np.zeros((len(self.gauge_id), len(dates), len(features)), dtype="float32")
 
         # Process each entity using dask
-        with LocalCluster(n_workers=self.cfg.num_workers, threads_per_worker=1) as cluster, Client(cluster) as client:
+        with (
+            LocalCluster(n_workers=max(self.cfg.num_workers, 1), threads_per_worker=1) as cluster,
+            Client(cluster) as client,
+        ):
             futures = client.map(self._process_df, self.gauge_id, extract_values=True)
             # Create a mapping to place arrays in correct order
             future_to_idx = {future: idx for idx, future in enumerate(futures)}
@@ -602,7 +644,10 @@ class BaseDataset(Dataset):
         gauge_idx = [np.where(zarr_ids == id)[0][0] for id in self.gauge_id]
 
         # Process each entity using dask
-        with LocalCluster(n_workers=self.cfg.num_workers, threads_per_worker=1) as cluster, Client(cluster) as client:
+        with (
+            LocalCluster(n_workers=max(self.cfg.num_workers, 1), threads_per_worker=1) as cluster,
+            Client(cluster) as client,
+        ):
             futures = client.map(self._write_df_to_zarr, self.gauge_id, gauge_idx)  # Run function
             # Monitor progress
             for future in tqdm(
@@ -755,8 +800,8 @@ class BaseDataset(Dataset):
         # ----------------------------------
         if self.cfg.static_input:
             xs_keys = list(scaler["xs_mean"].keys())
-            xs_means = [scaler["xs_mean"][k] for k in fc_keys]
-            xs_stds = [scaler["xs_std"][k] for k in fc_keys]
+            xs_means = [scaler["xs_mean"][k] for k in xs_keys]
+            xs_stds = [scaler["xs_std"][k] for k in xs_keys]
 
             da = xr.DataArray(
                 np.stack([xs_means, xs_stds], axis=0),
@@ -812,8 +857,6 @@ class BaseDataset(Dataset):
         if self.cfg.static_input:
             self.ds_attributes = torch.from_numpy(self.ds_attributes["data"].values).float()
             self.ds_attributes.share_memory_()
-
-        self.cfg.logger.info("Datasets have been moved to shared memory tensors.")
 
     def standardize_data(self):
         """Standardize the data using the previously-computed scaler."""

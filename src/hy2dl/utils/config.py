@@ -490,6 +490,14 @@ class Config(object):
         return self._cfg.get("learning_rate", 0.001)
 
     @property
+    def loss(self) -> str:
+        return self._cfg.get("loss", "nse_basin_averaged")
+
+    @property
+    def loss_weights(self) -> list[float]:
+        return self._cfg.get("loss_weights")
+
+    @property
     def max_updates_per_epoch(self) -> int:
         return self._cfg.get("max_updates_per_epoch")
 

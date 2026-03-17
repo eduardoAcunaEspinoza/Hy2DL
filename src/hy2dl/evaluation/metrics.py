@@ -1,157 +1,247 @@
-import numpy as np
-import pandas as pd
+from pathlib import Path
+
+import xarray as xr
 
 
-def nse(df_results: dict[str, pd.DataFrame], average: bool = True) -> np.array:
+def NSE(ds_results: xr.Dataset | Path, average: bool = False) -> xr.Dataset | float:
     """Nash--Sutcliffe Efficiency.
 
     Parameters
     ----------
-    df_results : dict[str, pd.DataFrame]
-        Dictionary, where each key is associated with a basin_id and each item is a pandas DataFrame.
-        Each dataframe should contained at least two columns: y_sim for the simulated values and y_obs for the observed
-        values.
+    ds_results : xr.Dataset | Path
+         xarray Dataset or path to a zarr file containing the results of the evaluation.
+        Expected dimensions: ("gauge_id", "date", "feature").
     average : bool
-        True if one wants to average the NSE over all the basin (items of the dictionary), or False
-        if one wants the value for each one
+        True to return a single median NSE value across all gauges and features.
+        False to return the unaggregated NSE for each basin and feature.
 
     Returns
     -------
-    loss: np.array
-        If average==True returns one value for all basins. If average==False returns the NSE for each
-        element.
+    float | xr.DataArray
+        If average==True: returns a single float (the global median NSE).
+        If average==False: returns an xr.DataArray with dimensions ("gauge_id", "feature").
 
     """
-    loss = []
-    # Go for each element (basin) of the dictionary
-    for basin in df_results.values():
-        # Read values
-        y_sim = basin["y_sim"].values
-        y_obs = basin["y_obs"].values
+    if isinstance(ds_results, Path):
+        ds_results = xr.open_zarr(ds_results)
 
-        # Mask values based on NaN from y_sim (this occurs in validation and testing if there are NaN in the inputs)
-        mask_y_sim = ~np.isnan(y_sim)
-        y_sim = y_sim[mask_y_sim]
-        y_obs = y_obs[mask_y_sim]
+    y_sim = ds_results["y_sim"]
+    y_obs = ds_results["y_obs"]
 
-        # Mask values based on NaN from y_obs (this occurs in validation and testing if there are NaN in the output)
-        mask_y_obs = ~np.isnan(y_obs)
-        y_sim = y_sim[mask_y_obs]
-        y_obs = y_obs[mask_y_obs]
+    # mask-out nans
+    valid_mask = y_sim.notnull() & y_obs.notnull()
+    y_sim = y_sim.where(valid_mask)
+    y_obs = y_obs.where(valid_mask)
 
-        # Calculate NSE
-        if y_sim.size > 1 and y_obs.size > 1:
-            loss.append(1.0 - np.sum((y_sim - y_obs) ** 2) / np.sum((y_obs - np.mean(y_obs)) ** 2))
-        else:
-            loss.append(np.nan)
+    # Calculate metric
+    numerator = ((y_sim - y_obs) ** 2).sum(dim="date", skipna=True)
+    obs_mean = y_obs.mean(dim="date", skipna=True)
+    denominator = ((y_obs - obs_mean) ** 2).sum(dim="date", skipna=True)
+    nse = 1.0 - (numerator / denominator)
 
-    return np.nanmedian(loss) if average else np.asarray(loss)
+    return nse.compute().median(skipna=True).item() if average else nse.compute()
 
 
-def forecast_NSE(results: dict[str, pd.DataFrame], filter: dict[str, pd.DataFrame] = None) -> dict[str, pd.DataFrame]:
+def RMSE(ds_results: xr.Dataset | Path, average: bool = False) -> xr.DataArray | float:
+    """Root Mean Square Error.
+
+    Parameters
+    ----------
+    ds_results : xr.Dataset | Path
+        xarray Dataset containing 'y_sim' and 'y_obs' variables.
+        Expected dimensions: ("gauge_id", "date", "feature").
+    average : bool
+        True to return a single median RMSE value across all basins and features.
+        False to return the unaggregated RMSE for each basin and feature.
+
+    Returns
+    -------
+    float | xr.DataArray
+        If average==True: returns a single float (the global median RMSE).
+        If average==False: returns an xr.DataArray with dimensions ("gauge_id", "feature").
+
+    """
+    if isinstance(ds_results, Path):
+        ds_results = xr.open_zarr(ds_results)
+
+    y_sim = ds_results["y_sim"]
+    y_obs = ds_results["y_obs"]
+
+    # mask-out nans
+    valid_mask = y_sim.notnull() & y_obs.notnull()
+    y_sim = y_sim.where(valid_mask)
+    y_obs = y_obs.where(valid_mask)
+
+    # Calculate metric
+    squared_error = (y_sim - y_obs) ** 2
+    mean_squared_error = squared_error.mean(dim="date", skipna=True)
+    rmse_vals = mean_squared_error**0.5
+
+    return rmse_vals.compute().median(skipna=True).item() if average else rmse_vals.compute()
+
+
+def forecast_NSE(ds_results: xr.Dataset | Path, filter_mask: xr.DataArray = None) -> xr.DataArray:
     """Calculate the Nash--Sutcliffe Efficiency for each forecasted lead time.
 
     Parameters
     ----------
-    results : dict[str, pd.DataFrame]
-        Dictionary, where each key is associated with a basin_id and each item is a datetime indexed pandas DataFrame.
-
+    ds_results : xr.Dataset | Path
+        Dataset loaded from the evaluation Zarr store containing 'y_sim' and 'y_obs'.
+        Expected dimensions:
+        - y_sim: (gauge_id, date, lead_time, feature)
+        - y_obs: (gauge_id, date, feature)
+    filter_mask : xr.DataArray, optional
+        Boolean DataArray to filter values during evaluation. Expected dimensions (gauge_id, date).
 
     Returns
     -------
-    df_loss: pd.DataFrame
-        Daframe indexed by the basin_id and the columns are the NSE for each lead time.
+    da_nse: xr.DataArray
+        DataArray indexed by the gauge_id. The columns are the NSE for each lead time and feature.
 
     """
-    nse_per_basin = []
-    for basin, df in results.items():
-        nrow, ncol = df.shape
-        n_lead_times = ncol - 1  # first column is the observed value
-        last_forecast_row = nrow - n_lead_times  # row where the last forecast is emmited
+    if isinstance(ds_results, Path):
+        ds_results = xr.open_zarr(ds_results)
 
-        nse_per_leadtime = []
-        # Iterate through the different lead times
-        for i in range(n_lead_times):
-            # The simulated values for each lead time are located in the different columns
-            y_sim = df.iloc[:last_forecast_row, i + 1]
-            # The observed values are always located in the first column. To extract the observed value associated with
-            # each lead time, we select the observed values shifted by the number of lead times.
-            y_obs = df.iloc[i + 1 : last_forecast_row + i + 1, 0]
+    nse_per_leadtime = []
+    lead_times = ds_results["lead_time"].values
 
-            # If there is an additional filter for the values considered during evaluation, we apply it
-            if filter is not None:
-                y_sim = y_sim[filter[basin][:last_forecast_row].values].values
-                y_obs = y_obs[filter[basin][:last_forecast_row].values].values
-            else:
-                y_sim = y_sim.values
-                y_obs = y_obs.values
+    for lt in lead_times:
+        # simulated values for the current lead time
+        y_sim = ds_results["y_sim"].sel(lead_time=lt)
 
-            # Calcule NSE
-            numerator = np.nansum((y_sim - y_obs) ** 2, axis=0)
-            denominator = np.nansum((y_obs - np.nanmean(y_obs, axis=0)) ** 2, axis=0)
-            nse_per_leadtime.append(1 - numerator / denominator)
+        # shift observations backwards to align with the initialization date. A forecast emitted on 'date' with lead
+        # time 'lt' verifies against observation at 'date + lt'
+        y_obs = ds_results["y_obs"].shift(date=-int(lt))
 
-        nse_per_basin.append(nse_per_leadtime)
+        # create a valid mask (ensure neither sim nor obs is NaN)
+        valid_mask = y_sim.notnull() & y_obs.notnull()
+        if filter_mask is not None:
+            valid_mask = valid_mask & filter_mask
 
-    df_loss = pd.DataFrame(nse_per_basin, index=list(results.keys()), columns=df.columns[1:])
-    df_loss.index.name = "gauge_id"
+        # apply mask
+        y_sim_v = y_sim.where(valid_mask)
+        y_obs_v = y_obs.where(valid_mask)
 
-    return df_loss
+        # 4. Calculate vectorized NSE
+        numerator = ((y_sim_v - y_obs_v) ** 2).sum(dim="date", skipna=True)
+        obs_mean = y_obs_v.mean(dim="date", skipna=True)
+        denominator = ((y_obs_v - obs_mean) ** 2).sum(dim="date", skipna=True)
+        nse_per_leadtime.append(1 - (numerator / denominator))
+
+    # concatenate all lead times back into a single DataArray
+    da_nse = xr.concat(nse_per_leadtime, dim=xr.Variable("lead_time", lead_times))
+
+    return da_nse.compute()
 
 
-def forecast_PNSE(results: dict[str, pd.DataFrame], filter: dict[str, pd.DataFrame] = None) -> dict[str, pd.DataFrame]:
+def forecast_PNSE(ds_results: xr.Dataset | Path, filter_mask: xr.DataArray = None) -> xr.DataArray:
     """Calculate the persistence Nash--Sutcliffe Efficiency for each forecasted lead time.
 
     Parameters
     ----------
-    results : dict[str, pd.DataFrame]
-        Dictionary, where each key is associated with a basin_id and each item is a datetime indexed pandas DataFrame.
-
-
-    filter :
+    ds_results : xr.Dataset | Path
+        Dataset loaded from the evaluation Zarr store containing 'y_sim' and 'y_obs'.
+        Expected dimensions:
+        - y_sim: (gauge_id, date, lead_time, feature)
+        - y_obs: (gauge_id, date, feature)
+    filter_mask : xr.DataArray, optional
+        Boolean DataArray to filter values during evaluation. Expected dimensions (gauge_id, date).
 
     Returns
     -------
-    df_loss: pd.DataFrame
-        Daframe indexed by the basin_id and the columns are the NSE for each lead time.
+    da_pnse: xr.DataArray
+        DataArray indexed by the gauge_id. The columns are the PNSE for each lead time and feature.
 
     """
-    nse_per_basin = []
-    for basin, df in results.items():
-        nrow, ncol = df.shape
-        n_lead_times = ncol - 1  # first column is the observed value
-        last_forecast_row = nrow - n_lead_times  # row where the last forecast is emmited
+    if isinstance(ds_results, Path):
+        ds_results = xr.open_zarr(ds_results)
 
-        nse_per_leadtime = []
-        # Iterate through the different lead times
-        for i in range(n_lead_times):
-            # The simulated values for each lead time are located in the different columns
-            y_sim = df.iloc[:last_forecast_row, i + 1]
-            # The observed values are always located in the first column. To extract the observed value associated with
-            # each lead time, we select the observed values shifted by the number of lead times.
-            y_obs = df.iloc[i + 1 : last_forecast_row + i + 1, 0]
-            # To calculate the persistent NSE, we normalize by the difference between the observed value and time t and
-            # the observed value at the time the forecast was emmited.
-            persistent = df.iloc[0:last_forecast_row, 0]
+    pnse_per_leadtime = []
+    lead_times = ds_results["lead_time"].values
 
-            # If there is an additional filter for the values considered during evaluation, we apply it
-            if filter is not None:
-                y_sim = y_sim[filter[basin][:last_forecast_row].values].values
-                y_obs = y_obs[filter[basin][:last_forecast_row].values].values
-                persistent = persistent[filter[basin][:last_forecast_row].values].values
-            else:
-                y_sim = y_sim.values
-                y_obs = y_obs.values
-                persistent = persistent.values
+    # The persistent value is the observation at the time the forecast was emitted
+    y_persistent = ds_results["y_obs"]
 
-            # Calcule PNSE
-            numerator = np.nansum((y_sim - y_obs) ** 2, axis=0)
-            denominator = np.nansum((y_obs - persistent) ** 2, axis=0)
-            nse_per_leadtime.append(1 - numerator / denominator)
+    for lt in lead_times:
+        # simulated values for the current lead time
+        y_sim = ds_results["y_sim"].sel(lead_time=lt)
 
-        nse_per_basin.append(nse_per_leadtime)
+        # shift observations backwards to align with the initialization date. A forecast emitted on 'date' with lead
+        # time 'lt' verifies against observation at 'date + lt'
+        y_obs = ds_results["y_obs"].shift(date=-int(lt))
 
-    df_loss = pd.DataFrame(nse_per_basin, index=list(results.keys()), columns=df.columns[1:])
-    df_loss.index.name = "gauge_id"
+        # create a valid mask (ensure sim, target, and persistent are not NaN)
+        valid_mask = y_sim.notnull() & y_obs.notnull() & y_persistent.notnull()
+        if filter_mask is not None:
+            valid_mask = valid_mask & filter_mask
 
-    return df_loss
+        # apply the mask
+        y_sim_v = y_sim.where(valid_mask)
+        y_obs_v = y_obs.where(valid_mask)
+        y_persistent_v = y_persistent.where(valid_mask)
+
+        # 4. Calculate vectorized PNSE
+        numerator = ((y_sim_v - y_obs_v) ** 2).sum(dim="date", skipna=True)
+        denominator = ((y_obs_v - y_persistent_v) ** 2).sum(dim="date", skipna=True)
+
+        pnse_per_leadtime.append(1 - (numerator / denominator))
+
+    # concatenate all lead times back into a single DataArray
+    da_pnse = xr.concat(pnse_per_leadtime, dim=xr.Variable("lead_time", lead_times))
+
+    return da_pnse.compute()
+
+
+def forecast_RMSE(ds_results: xr.Dataset | Path, filter_mask: xr.DataArray = None) -> xr.DataArray:
+    """Calculate the Root Mean Squared Error (RMSE) for each forecasted lead time.
+
+    Parameters
+    ----------
+    ds_results : xr.Dataset | Path
+        Dataset loaded from the evaluation Zarr store containing 'y_sim' and 'y_obs'.
+        Expected dimensions:
+        - y_sim: (gauge_id, date, lead_time, feature)
+        - y_obs: (gauge_id, date, feature)
+    filter_mask : xr.DataArray, optional
+        Boolean DataArray to filter values during evaluation. Expected dimensions (gauge_id, date).
+
+    Returns
+    -------
+    da_rmse: xr.DataArray
+        DataArray indexed by the gauge_id. The columns are the RMSE for each lead time and feature.
+
+    """
+    if isinstance(ds_results, Path):
+        ds_results = xr.open_zarr(ds_results)
+
+    rmse_per_leadtime = []
+    lead_times = ds_results["lead_time"].values
+
+    for lt in lead_times:
+        # simulated values for the current lead time
+        y_sim = ds_results["y_sim"].sel(lead_time=lt)
+
+        # shift observations backwards to align with the initialization date. A forecast emitted on 'date' with lead
+        # time 'lt' verifies against observation at 'date + lt'
+        y_obs = ds_results["y_obs"].shift(date=-int(lt))
+
+        # create a valid mask (ensure neither sim nor obs is NaN)
+        valid_mask = y_sim.notnull() & y_obs.notnull()
+        if filter_mask is not None:
+            valid_mask = valid_mask & filter_mask
+
+        # apply the mask
+        y_sim_v = y_sim.where(valid_mask)
+        y_obs_v = y_obs.where(valid_mask)
+
+        # 4. Calculate vectorized RMSE
+        # Calculate the mean of the squared errors along the date dimension, then take the square root
+        mse = ((y_sim_v - y_obs_v) ** 2).mean(dim="date", skipna=True)
+        rmse = mse**0.5
+
+        rmse_per_leadtime.append(rmse)
+
+    # 5. Concatenate all lead times back into a single DataArray
+    da_rmse = xr.concat(rmse_per_leadtime, dim=xr.Variable("lead_time", lead_times))
+
+    return da_rmse.compute()

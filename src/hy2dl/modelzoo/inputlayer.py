@@ -1,5 +1,5 @@
 from itertools import chain
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -64,15 +64,14 @@ class InputLayer(nn.Module):
         # Save config
         self.cfg = cfg
 
-    def forward(
-        self, sample: dict[str, torch.Tensor | dict[str, torch.Tensor]], assemble: bool = True
-    ) -> torch.Tensor | dict[str, torch.Tensor]:
+    def forward(self, sample: dict[str, Any], assemble: bool = True) -> torch.Tensor | dict[str, torch.Tensor]:
         """Forward pass of embedding networks.
 
         Parameters
         ----------
-        sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]
-            Dictionary with the different tensors / dictionaries that will be used for the forward pass.
+        sample: dict[str, Any]
+            Dictionary with the different variables that will be used in the forward pass,
+            see `hy2dl.datasetzoo.basedataset.Basedataset.__getitems__()` for details.
 
         assemble: bool
             Whether to assemble the different tensors into a single tensor or return a dictionary with the different

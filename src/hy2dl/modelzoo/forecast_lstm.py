@@ -1,3 +1,5 @@
+from typing import Any
+
 import torch
 import torch.nn as nn
 
@@ -15,6 +17,7 @@ class ForecastLSTM(nn.Module):
     ----------
     cfg : Config
         Configuration object containing model hyperparameters and settings.
+
     """
 
     def __init__(self, cfg: Config):
@@ -40,18 +43,26 @@ class ForecastLSTM(nn.Module):
         if cfg.initial_forget_bias is not None:
             self.lstm.bias_hh_l0.data[cfg.hidden_size : 2 * cfg.hidden_size] = cfg.initial_forget_bias
 
-    def forward(self, sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+    def forward(self, sample: dict[str, Any]) -> dict[str, torch.Tensor]:
         """Forward pass of lstm network
 
         Parameters
         ----------
-        sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]
-            Dictionary with the different tensors / dictionaries that will be used for the forward pass.
+        sample: dict[str, Any]
+            Dictionary with the different variables that will be used in the forward pass,
+            see `hy2dl.datasetzoo.basedataset.Basedataset.__getitems__()` for details.
 
-        Returns
+         Returns
         -------
         Dict[str, torch.Tensor]
-            y_hat: Prediction for the `predict_last_n` time steps.
+            y_hat: model predictions, shape (B, S, N)
+
+        Notes
+        -----
+        Shape abbreviations used:
+        - B: batch size
+        - S: sequence length hindcast period.
+        - N: number of target variables
 
         """
         # Preprocess data for hindcast period
