@@ -51,6 +51,7 @@ class Config(object):
         self._check_nan_settings()
         self._check_forecast()
         self._check_models()
+        self._check_metrics()
         self._check_num_workers()
         self._device = Config._check_device(device=self._cfg.get("device", "cpu"))
 
@@ -179,6 +180,49 @@ class Config(object):
                 self.forecast_signals = pfi
             else:
                 self.forecast_signals = {"pseudo_forecast": pfi, "forecast": fi}
+
+    def _check_metrics(self):
+        """Check that the specified metrics are supported."""
+
+        from hy2dl.evaluation.metrics import forecast_metric_registry, simulation_metric_registry
+
+        if not isinstance(self.validation_metric, str):
+            raise ValueError(
+                "validation_metric must be a single string. Multiple metrics for validation are not supported."
+            )
+
+        is_simulation_mode = len(self.pseudo_forecast_input) == 0 and len(self.forecast_input) == 0
+        if is_simulation_mode:
+            active_registry = simulation_metric_registry
+            mode_name = "simulation"
+        else:
+            active_registry = forecast_metric_registry
+            mode_name = "forecast"
+
+        valid_keys = list(active_registry.keys())
+
+        # validation_metric
+        if self.validation_metric.lower() not in valid_keys:
+            raise ValueError(
+                f"Unknown validation_metric for {mode_name} mode: '{self.validation_metric}'. "
+                f"Available metrics: {valid_keys}"
+            )
+
+        # testing_metrics
+        if isinstance(self.testing_metrics, str):
+            if self.testing_metrics.lower() != "all" and self.testing_metrics.lower() not in valid_keys:
+                raise ValueError(
+                    f"Unknown testing_metrics: '{self.testing_metrics}'. Available metrics: {valid_keys} or 'all'"
+                )
+        elif isinstance(self.testing_metrics, list):
+            for metric in self.testing_metrics:
+                if metric.lower() not in valid_keys:
+                    raise ValueError(
+                        f"Unknown testing metric in {mode_name} mode: '{metric}'. "
+                        f"Available metrics: {valid_keys} or 'all'"
+                    )
+        else:
+            raise TypeError("testing_metrics must be a string or a list of strings.")
 
     def _check_models(self):
         """Check for specific configurations required by certain models."""
@@ -714,6 +758,10 @@ class Config(object):
         return self._cfg.get("teacher_forcing_scheduler")
 
     @property
+    def testing_metrics(self) -> str | list[str]:
+        return self._cfg.get("testing_metrics", "all")
+
+    @property
     def testing_period(self) -> list[str]:
         return self._cfg.get("testing_period")
 
@@ -732,6 +780,10 @@ class Config(object):
     @property
     def validate_every(self) -> int:
         return self._cfg.get("validate_every", 1)
+
+    @property
+    def validation_metric(self) -> str:
+        return self._cfg.get("validation_metric", "nse")
 
     @property
     def validation_period(self) -> list[str]:

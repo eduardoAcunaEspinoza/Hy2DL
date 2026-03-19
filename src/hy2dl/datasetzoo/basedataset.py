@@ -871,7 +871,7 @@ class BaseDataset(Dataset):
 
         # Standardize forecast data (if applicable)
         if self.forecast_input:
-            if self.dataset_in_ram:
+            if self.fc_in_ram:
                 self.ds_fc = (self.ds_fc - self.scaler_fc.sel(statistic="mean")) / self.scaler_fc.sel(statistic="std")
                 self.cfg.logger.info("Forecast dataset was successfully standardized.")
             else:

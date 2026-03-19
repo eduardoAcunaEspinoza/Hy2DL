@@ -13,7 +13,7 @@ from hy2dl.utils.config import Config
 from hy2dl.utils.utils import set_random_seed, upload_to_device
 
 
-class BaseTrainer:
+class BaseTrainer(object):
     """Class to train a model
 
     Parameters
