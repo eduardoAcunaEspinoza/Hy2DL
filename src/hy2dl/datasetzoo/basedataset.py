@@ -13,11 +13,10 @@ import xarray_tensorstore
 import yaml
 import zarr
 from dask.distributed import Client, LocalCluster, as_completed
+from hy2dl.utils.config import Config
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from tqdm.dask import TqdmCallback
-
-from hy2dl.utils.config import Config
 
 
 class BaseDataset(Dataset):
@@ -206,6 +205,12 @@ class BaseDataset(Dataset):
         - NS: number of static inputs
 
         """
+        if not self.dataset_in_ram and getattr(self, "ds_ts", None) is None:
+            self._load_dataset(engine="tensorstore")
+
+        if self.cfg.path_forecast_dataset is not None and not self.fc_in_ram and getattr(self, "ds_fc", None) is None:
+            self._load_forecast_dataset(engine="tensorstore")
+            
         sample = {}
         # Valid samples
         valid_sample = self.valid_samples[indices]
@@ -454,7 +459,119 @@ class BaseDataset(Dataset):
 
         return sample
 
-    def calculate_basin_std(self):
+    def setup_dataset(
+        self,
+        check_nan=True,
+        path_scaler: Optional[Path | str] = None,
+        path_validate_samples: Optional[Path | str] = None,
+    ):
+        """Runs the complete setup process to get your data ready for training or evaluation.
+
+        This is the main function you should call to initialize your dataset. It goes through multiple steps to build,
+        validate, and format your data before the model can use it.
+
+        The setup checklist happens in this exact order:
+        1. Load Data: It either builds your dataset from scratch or loads an existing one from your hard drive.
+        2. Validate Samples: Check validity of the data.
+        3. Calculate Stats: Calculate data statistics that are used for standardization.
+        4. Finalize: runs `_finalize_setup()` to optimize memory and data access speed.
+
+        Parameters
+        ----------
+        check_nan : bool, default=True
+            Check for nan values during validate_samples-
+        path_scaler : Path or str, optional
+            Path to saved `scaler.yml` file.
+        path_validate_samples : Path or str, optional
+            Path to a saved CSV file that lists all the valid samples.
+
+        """
+        # Check if path to existing dataset was specified in config
+        _not_dataset = getattr(self.cfg, f"path_dataset_{self.period}") is None
+        # Check if we are in training mode
+        _is_training = self.period == "training"
+        if not _is_training and not path_scaler:
+            raise ValueError(
+                "When dataset for validation or testing is being created, argument `path_scaler` should be provided"
+            )
+        # --------------------------
+        # Load dataset of observed data
+        # --------------------------
+        # Create dataset in RAM
+        if _not_dataset and self.cfg.dataset_in_ram:
+            self._create_dataset()
+            self.dataset_in_ram = True
+        else:
+            if _not_dataset:  # Create zarr dataset and load it lazily
+                self._create_zarr_dataset()
+                self._load_dataset(path_dataset=self.path_dataset)
+            else:  # Load existing zarr dataset lazily
+                self._load_dataset()
+            self.dataset_in_ram = False
+
+        # static attributes
+        self._process_attributes()
+
+        # --------------------------
+        # Load forecast dataset
+        # --------------------------
+        if self.cfg.path_forecast_dataset is not None:
+            self._load_forecast_dataset()
+            self.fc_in_ram = False
+
+        # --------------------------
+        # Validate samples
+        # --------------------------
+        if path_validate_samples is not None:
+            self._load_valid_samples(path_scaler=self.path_scaler)
+        else:
+            self._validate_samples(check_nan=check_nan)
+
+        # --------------------------
+        # Scalers
+        # --------------------------
+        if path_scaler is not None:
+            self._load_scaler(path_scaler=path_scaler)
+        else:
+            self._calculate_scaler()
+
+        # --------------------------
+        # Additional variables
+        # --------------------------
+        if self.cfg.loss == "nse_basin_averaged":
+            self._calculate_basin_std()
+
+        # --------------------------
+        # Finalize dataset setup
+        # --------------------------
+        self._finalize_setup()
+
+    def _add_lagged_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add lagged input features to dataframe.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input DataFrame.
+
+        Returns
+        -------
+        df: pd.DataFrame
+            DataFrame with lagged input features added.
+
+        """
+        for feature, shift in self.cfg.lagged_features.items():
+            if isinstance(shift, list):  # If we have a list and we want to shift a variable multiple times
+                for s in set(shift):  # only consider unique values
+                    df[f"{feature}_shift{s}"] = df[feature].shift(periods=s)
+            elif isinstance(shift, int):
+                df[f"{feature}_shift{shift}"] = df[feature].shift(periods=shift)
+            else:
+                raise ValueError("The value of the 'lagged_features' arg must be either an int or a list of ints")
+
+        return df
+
+    def _calculate_basin_std(self):
         """Calculate standard deviation of the target variables for each basin.
 
         This information is necessary if we use the basin-averaged NSE loss function during training [#]_.
@@ -470,17 +587,9 @@ class BaseDataset(Dataset):
         self.basin_std = torch.tensor(basin_std.values, dtype=torch.float32)
         self.basin_std.share_memory_()
 
-    def calculate_scaler(self, save_scaler: bool = True):
-        """Calculate statistics of data.
+    def _calculate_scaler(self):
+        """Calculate data statistics"""
 
-        Note: This function should only be called in the training period.
-
-        Parameters
-        ----------
-        save_scaler : bool
-            If True, the scaler will be saved in a .yml file
-
-        """
         ### ------------------
         ### Dynamic variables
         ### ------------------
@@ -517,462 +626,27 @@ class BaseDataset(Dataset):
             self.scaler_attributes = self.scaler_attributes.assign_coords(statistic=["mean", "std"])
 
         # Save scaler
-        if save_scaler:
-            scaler = {
-                "xd_mean": self.scaler.sel(statistic="mean").to_pandas()["data"].to_dict(),
-                "xd_std": self.scaler.sel(statistic="std").to_pandas()["data"].to_dict(),
-            }
-            if self.cfg.forecast_input:
-                scaler.update(
-                    {
-                        "xfc_mean": self.scaler_fc.sel(statistic="mean").to_pandas()["data"].to_dict(),
-                        "xfc_std": self.scaler_fc.sel(statistic="std").to_pandas()["data"].to_dict(),
-                    }
-                )
-            if self.cfg.static_input:  # Update scaler dictionary with static attributes if applicable
-                scaler.update(
-                    {
-                        "xs_mean": self.scaler_attributes.sel(statistic="mean").to_pandas()["data"].to_dict(),
-                        "xs_std": self.scaler_attributes.sel(statistic="std").to_pandas()["data"].to_dict(),
-                    }
-                )
-
-            with open(self.cfg.path_save_folder / "scaler.yml", "w") as file:
-                yaml.dump(scaler, file, default_flow_style=False, sort_keys=False)
-
-    def create_dataset(self, save_dataset: bool = False):
-        """Creates the dataset and keeps it in memory.
-
-        The function reads and process the data, for each entity (e.g., catchment), and store the results as an
-        in-memory `xarray.Dataset` (`self.ds_ts`) with the following structure:
-
-        - Dimensions / Coordinates:
-            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
-            - date: Time dimension.
-            - feature: Variables of interest
-        - Data Variables:
-            - data (gauge_id, date, feature): The primary data values stored as a float array.
-
-        It also process the static attributes.
-
-        Parameters
-        ----------
-        save_dataset: bool, default=False
-            Whether to save the dataset to disk after creating it.
-
-
-        Note: Because this function builds the entire dataset in RAM, you must have enough memory to hold the processed
-        data. If your dataset exceeds available RAM, use `create_zarr_dataset()` to write directly to disk and
-        `load_dataset` (together with configuration argument dataset_in_ram: False) to load it lazily.
-
-        """
-        self.cfg.logger.info(f"Creating {self.period} dataset in memory...")
-        processing_time = time.time()
-        # Get metadata (dates and features) from a sample to pre-allocate memory
-        dates = pd.date_range(start=self.warmup_start_date, end=self.end_date, freq=self.data_freq)
-        features = self.variables_of_interest
-
-        # Pre-allocate a 3D numpy array: (ids, dates, features)
-        data_array = np.zeros((len(self.gauge_id), len(dates), len(features)), dtype="float32")
-
-        # Process each entity using dask
-        with (
-            LocalCluster(n_workers=max(self.cfg.num_workers, 1), threads_per_worker=1) as cluster,
-            Client(cluster) as client,
-        ):
-            futures = client.map(self._process_df, self.gauge_id, extract_values=True)
-            # Create a mapping to place arrays in correct order
-            future_to_idx = {future: idx for idx, future in enumerate(futures)}
-            # Monitor progress
-            for future in tqdm(
-                as_completed(futures), total=len(futures), desc="Processing gauges", unit="entity", ascii=True
-            ):
-                idx = future_to_idx[future]
-                data_array[idx, :, :] = future.result()
-
-        # Construct xarray Dataset
-        self.ds_ts = xr.Dataset(
-            coords={
-                "gauge_id": ("gauge_id", np.array(self.gauge_id, dtype=object)),
-                "date": dates,
-                "feature": features,
-            },
-            data_vars={"data": (("gauge_id", "date", "feature"), data_array)},
-        )
-
-        self.dataset_in_ram = True
-        self.cfg.logger.info("Dataset created successfully.")
-        self.cfg.logger.info(
-            f"Time required to process {self.ds_ts.sizes['gauge_id']} gauges: "
-            f"{datetime.timedelta(seconds=int(time.time() - processing_time))}"
-        )
-
-        if save_dataset:
-            self.path_dataset = getattr(self.cfg, f"path_dataset_{self.period}")
-            chunked_ds = self.ds_ts.chunk({"gauge_id": 1, "date": -1, "feature": -1})
-            chunked_ds.to_zarr(self.path_dataset, mode="w", consolidated=True)
-            self.cfg.logger.info(f"Dataset saved at {self.path_dataset}")
-
-        # Process static attributes
-        self._process_attributes()
-
-    def create_zarr_dataset(self):
-        """Creates the dataset and writes it directly to a zarr file on disk.
-
-        This function reads and processes the data for each entity (e.g., catchment) and stores the results,
-        sequentially, in a zarr structure with the following format:
-
-        - Dimensions / Coordinates:
-            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
-            - date: Time dimension.
-            - feature: Variables of interest
-        - Data Variables:
-            - data (gauge_id, date, feature): The primary data values stored as a float32 array.
-
-        Note: This function is designed to handle datasets larger than available RAM by writing the processed data
-        sequentially to disk.
-
-        """
-        self.cfg.logger.info("Creating zarr dataset...")
-        processing_time = time.time()
-        # Initialize zarr structure to store the processed results
-        self.path_dataset = getattr(self.cfg, f"path_dataset_{self.period}")
-        self._initialize_zarr()
-
-        # Create array of entities' index (used later to write the data in the right position in the zarr)
-        zarr_ids = zarr.open(self.path_dataset, mode="r")["gauge_id"][:]
-        gauge_idx = [np.where(zarr_ids == id)[0][0] for id in self.gauge_id]
-
-        # Process each entity using dask
-        with (
-            LocalCluster(n_workers=max(self.cfg.num_workers, 1), threads_per_worker=1) as cluster,
-            Client(cluster) as client,
-        ):
-            futures = client.map(self._write_df_to_zarr, self.gauge_id, gauge_idx)  # Run function
-            # Monitor progress
-            for future in tqdm(
-                as_completed(futures), total=len(futures), desc="Processing gauges", unit="entity", ascii=True
-            ):
-                future.result()
-
-        zarr.consolidate_metadata(self.path_dataset)  # consolidate metadata to optimize read performance
-        self.cfg.logger.info(f"Dataset created successfully. Zarr file can be found at {self.path_dataset}")
-        self.cfg.logger.info(
-            f"Time required to process {len(self.gauge_id)} gauges: "
-            f"{datetime.timedelta(seconds=int(time.time() - processing_time))}"
-        )
-
-    def load_dataset(self):
-        """Loads an existing zarr dataset from disk.
-
-        This function opens a zarr dataset (lazily by default using `xarray_tensorstore`) and filters it to include only
-        the gauges, time periods, and variables of interest specified in the configuration file. It also performs
-        sanity checks to ensure all requested data is present.
-
-        If the configuration flag `dataset_in_ram` is set to True, the function estimates the required memory. If
-        sufficient RAM is available, it fully computes and loads  the filtered dataset into memory (`self.ds_ts`).
-        Otherwise, it falls back to keeping the dataset as a lazy, disk-backed view.
-
-        Expected format of zarr file:
-        - Dimensions / Coordinates:
-            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
-            - date: Time dimension.
-            - feature: Variables of interest
-        - Data Variables:
-            - data (gauge_id, date, feature): The primary data values stored as a float32 array.
-
-        It also process the static attributes.
-
-        """
-        self.cfg.logger.info("Loading dataset from zarr...")
-        self.path_dataset = getattr(self.cfg, f"path_dataset_{self.period}")
-        # Read dataset, lazy view (not loaded into memory yet)
-        ds = xarray_tensorstore.open_zarr(self.path_dataset)
-
-        # Check if the dataset has the information requested in the configuration file
-        self._check_dataset(ds=ds)
-
-        # Filter dataset based on the information requested in the configuration file (in lazy mode)
-        ds = ds.sel(
-            gauge_id=self.gauge_id,
-            date=slice(self.warmup_start_date, self.end_date),
-            feature=self.variables_of_interest,
-        )
-
-        # If configuration argument 'dataset_in_ram' is True, we check if there is enough RAM to load the dataset
-        if self.cfg.dataset_in_ram and self._check_ram(required_ram=ds.nbytes):
-            self.ds_ts = ds.compute()
-            self.dataset_in_ram = True
-            self.cfg.logger.info("Dataset was successfully loaded into RAM.")
-        else:
-            self.ds_ts = ds
-            self.dataset_in_ram = False
-            self.cfg.logger.info("Dataset is loaded, in lazy mode, from disk.")
-
-        # Process static attributes
-        self._process_attributes()
-
-    def load_forecast_dataset(self):
-        """Load forecast dataset from zarr file.
-
-        This function opens a zarr dataset (lazily by default using `xarray_tensorstore`) and filters it to include only
-        the gauges, time periods, and variables of interest specified in the configuration file.
-
-        If the configuration flag `dataset_in_ram` is set to True, the function estimates the required memory. If
-        sufficient RAM is available, it fully computes and loads the filtered dataset into memory (`self.ds_forecast`).
-        Otherwise, it falls back to keeping the dataset as a lazy, disk-backed view.
-
-        Expected format of zarr file:
-        - Dimensions / Coordinates:
-            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
-            - date: Time dimension.
-            - lead_time: Lead time dimension (e.g., forecast horizon).
-            - feature: Variables of interest
-        - Data Variables:
-            - data (gauge_id, date, lead_time, feature): The primary data values stored as a float32 array.
-
-        """
-        self.cfg.logger.info("Loading forecast dataset from zarr...")
-        # Read dataset, lazy view (not loaded into memory yet)
-        ds_fc = xarray_tensorstore.open_zarr(self.cfg.path_forecast_dataset)
-
-        ds_fc = ds_fc.sel(
-            gauge_id=self.gauge_id,
-            date=slice(self.warmup_start_date, self.end_date),
-            lead_time=slice(0, self.cfg.seq_length_forecast),
-            feature=self.forecast_input,
-        )
-
-        # If configuration argument 'dataset_in_ram' is True, we check if there is enough RAM to load the dataset
-        if self.cfg.forecast_dataset_in_ram and self._check_ram(required_ram=ds_fc.nbytes):
-            self.ds_fc = ds_fc.compute()
-            self.fc_in_ram = True
-            self.cfg.logger.info("Forecast dataset was successfully loaded into RAM.")
-        else:
-            self.ds_fc = ds_fc
-            self.fc_in_ram = False
-            self.cfg.logger.info("Forecast dataset is loaded, in lazy mode, from disk.")
-
-    def load_scaler(self, path_scaler: Path | str):
-        """Load precomputed scaler.
-
-        Parameters
-        ----------
-        path_scaler: Path | str
-            Path to the .yml file containing the scaler
-
-        """
-        # Load scaler
-        with open(path_scaler, "r") as file:
-            scaler = yaml.safe_load(file)
-
-        # ----------------------------------
-        # Build scaler for dynamic variables
-        # ----------------------------------
-        dyn_keys = list(scaler["xd_mean"].keys())
-        dyn_means = [scaler["xd_mean"][k] for k in dyn_keys]
-        dyn_stds = [scaler["xd_std"][k] for k in dyn_keys]
-
-        da = xr.DataArray(
-            np.stack([dyn_means, dyn_stds], axis=0),
-            coords={"statistic": ["mean", "std"], "feature": dyn_keys},
-            dims=("statistic", "feature"),
-        )
-        self.scaler = da.to_dataset(name="data")
-
-        # ----------------------------------
-        # Build scaler for forecast
-        # ----------------------------------
+        scaler = {
+            "xd_mean": self.scaler.sel(statistic="mean").to_pandas()["data"].to_dict(),
+            "xd_std": self.scaler.sel(statistic="std").to_pandas()["data"].to_dict(),
+        }
         if self.cfg.forecast_input:
-            fc_keys = list(scaler["xfc_mean"].keys())
-            fc_means = [scaler["xfc_mean"][k] for k in fc_keys]
-            fc_stds = [scaler["xfc_std"][k] for k in fc_keys]
-
-            da = xr.DataArray(
-                np.stack([fc_means, fc_stds], axis=0),
-                coords={"statistic": ["mean", "std"], "feature": fc_keys},
-                dims=("statistic", "feature"),
+            scaler.update(
+                {
+                    "xfc_mean": self.scaler_fc.sel(statistic="mean").to_pandas()["data"].to_dict(),
+                    "xfc_std": self.scaler_fc.sel(statistic="std").to_pandas()["data"].to_dict(),
+                }
             )
-            self.scaler_fc = da.to_dataset(name="data")
-
-        # ----------------------------------
-        # Build scaler for static attributes
-        # ----------------------------------
-        if self.cfg.static_input:
-            xs_keys = list(scaler["xs_mean"].keys())
-            xs_means = [scaler["xs_mean"][k] for k in xs_keys]
-            xs_stds = [scaler["xs_std"][k] for k in xs_keys]
-
-            da = xr.DataArray(
-                np.stack([xs_means, xs_stds], axis=0),
-                coords={"statistic": ["mean", "std"], "feature": xs_keys},
-                dims=("statistic", "feature"),
-            )
-            self.scaler_attributes = da.to_dataset(name="data")
-
-    def load_valid_samples(self, path_valid_samples: Path | str):
-        """Load valid samples.
-
-        Parameters
-        ----------
-        path_valid_samples: Path | str
-            Path to the csv file containing the valid samples
-
-        """
-        self.valid_samples = np.loadtxt(
-            path_valid_samples,
-            delimiter=",",
-            dtype=[("gauge_id", "O"), ("date", "datetime64[ns]"), ("source", "O")],
-            skiprows=1,  # header
-            encoding="utf-8",
-        )
-
-        # Sort valid samples by gauge_id and date
-        self.valid_samples = np.sort(self.valid_samples, order=["gauge_id", "date"])
-
-        # Map valid samples to their corresponding indexes in the zarr structure for faster access in getitem
-        self._map_indexes()
-
-    def prepare_tensors(self):
-        """Converts xarray to shared memory tensors if the dataset is in RAM.
-
-        This method should be called AFTER:
-        - creating (`create_dataset`) or loading (`load_dataset` and `load_forecast_dataset`) the dataset
-        - standardizing the data (`calculate_scaler` or`load_scaler` and `standardize_data`)
-        - validating the samples (`validate_samples` or`load_valid_samples`).
-
-        All these methods depend on having the data as xarray Datasets. After calling `prepared_shared_tensors`, the
-        dataset will be stored as PyTorch tensors in shared memory, which avoids memory duplication when dataloader uses
-        multiple workers
-
-        """
-        if self.dataset_in_ram:
-            self.ds_ts = torch.from_numpy(self.ds_ts["data"].values).float()
-            self.ds_ts.share_memory_()
-
-        if self.fc_in_ram:
-            self.ds_fc = torch.from_numpy(self.ds_fc["data"].values).float()
-            self.ds_fc.share_memory_()
-
-        if self.cfg.static_input:
-            self.ds_attributes = torch.from_numpy(self.ds_attributes["data"].values).float()
-            self.ds_attributes.share_memory_()
-
-    def standardize_data(self):
-        """Standardize the data using the previously-computed scaler."""
-
-        if self.dataset_in_ram:
-            self.ds_ts = (self.ds_ts - self.scaler.sel(statistic="mean")) / self.scaler.sel(statistic="std")
-            self.cfg.logger.info("Dataset was successfully standardized.")
-        else:
-            self.cfg.logger.info(
-                "To keep lazy loading, the data will be standardized on the fly while constructing the batches."
+        if self.cfg.static_input:  # Update scaler dictionary with static attributes if applicable
+            scaler.update(
+                {
+                    "xs_mean": self.scaler_attributes.sel(statistic="mean").to_pandas()["data"].to_dict(),
+                    "xs_std": self.scaler_attributes.sel(statistic="std").to_pandas()["data"].to_dict(),
+                }
             )
 
-        # Standardize forecast data (if applicable)
-        if self.forecast_input:
-            if self.fc_in_ram:
-                self.ds_fc = (self.ds_fc - self.scaler_fc.sel(statistic="mean")) / self.scaler_fc.sel(statistic="std")
-                self.cfg.logger.info("Forecast dataset was successfully standardized.")
-            else:
-                self.cfg.logger.info(
-                    "To keep lazy loading, the forecast data will be standardized on the fly while constructing the "
-                    "batches."
-                )
-
-        # Standardize static attributes
-        if self.cfg.static_input:
-            self.ds_attributes = (
-                self.ds_attributes - self.scaler_attributes.sel(statistic="mean")
-            ) / self.scaler_attributes.sel(statistic="std")
-            self.cfg.logger.info("Static attributes were successfully standardized.")
-
-    def validate_samples(self, check_nan: bool = True, save_path: Optional[str] = None):
-        """Function to construct the valid samples table.
-
-        Parameters
-        ----------
-        check_nan : Optional[bool], default=True
-            Whether to check for NaN values while processing the data. This should typically be True during training,
-            and can be set to False during evaluation (validation/testing).
-        save_path: Optional[str], default=None
-            If provided, the function will save a table with the valid samples (gauge_id, date, source) to the specified
-            path.
-
-        """
-        self.cfg.logger.info("Validating samples...")
-        # Construct the validity mask as a lazy Dask array. This will not execute the computations yet, but will build
-        # the graph of operations to compute the validity mask.
-        logic_valid_mask = self._valid_samples_mask(check_nan=check_nan)
-
-        # Compute validation mask
-        with TqdmCallback(desc="Validating samples", unit="tasks", ascii=True):
-            valid_mask = logic_valid_mask.compute()
-
-        if self.cfg.unique_prediction_blocks:
-            # non-overlapping block indices
-            block_id = np.arange(valid_mask.sizes["date"] // self.cfg.predict_last_n) * self.cfg.predict_last_n + (
-                self.cfg.predict_last_n - 1
-            )
-            # non-overlapping mask
-            date_filter_np = np.zeros(valid_mask.sizes["date"], dtype=bool)
-            date_filter_np[block_id] = True
-            xr_date_filter = xr.DataArray(date_filter_np, dims=["date"], coords={"date": valid_mask.date})
-            # Apply mask
-            valid_mask = valid_mask & xr_date_filter
-
-        # Check for gauge_id with valid samples
-        valid_gauges = valid_mask.gauge_id[valid_mask.any(dim=["date", "source"])].values
-        self.cfg.logger.info(f"Number of gauges with valid samples: {len(valid_gauges)}")
-        invalid_gauges = valid_mask.gauge_id[~valid_mask.any(dim=["date", "source"])].values
-        if len(invalid_gauges) > 0:
-            self.cfg.logger.warning(f"Gauges without valid samples in period of interest: {', '.join(invalid_gauges)}")
-
-        # Extract valid samples (id, date, source) from the mask
-        gauge_indices, date_indices, source_indices = np.where(valid_mask.values)
-
-        # store valid samples in a structured array
-        self.valid_samples = np.empty(
-            len(gauge_indices), dtype=[("gauge_id", "O"), ("date", "datetime64[ns]"), ("source", "O")]
-        )
-        self.valid_samples["gauge_id"] = valid_mask.gauge_id.values[gauge_indices]
-        self.valid_samples["date"] = valid_mask.date.values[date_indices]
-        self.valid_samples["source"] = valid_mask.source.values[source_indices]
-        self.valid_samples = np.sort(self.valid_samples, order=["gauge_id", "date"])  # sort by gauge_id and date
-
-        self.cfg.logger.info(f"Number of valid samples: {self.valid_samples.size:_}".replace("_", " "))
-
-        if save_path:
-            df = pd.DataFrame(self.valid_samples)
-            df.to_csv(save_path, index=False)
-
-        # Map valid samples to their corresponding indexes in the zarr structure for faster access in getitem
-        self._map_indexes()
-
-    def _add_lagged_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add lagged input features to dataframe.
-
-        Parameters
-        ----------
-        df : pd.DataFrame
-            Input DataFrame.
-
-        Returns
-        -------
-        df: pd.DataFrame
-            DataFrame with lagged input features added.
-
-        """
-        for feature, shift in self.cfg.lagged_features.items():
-            if isinstance(shift, list):  # If we have a list and we want to shift a variable multiple times
-                for s in set(shift):  # only consider unique values
-                    df[f"{feature}_shift{s}"] = df[feature].shift(periods=s)
-            elif isinstance(shift, int):
-                df[f"{feature}_shift{shift}"] = df[feature].shift(periods=shift)
-            else:
-                raise ValueError("The value of the 'lagged_features' arg must be either an int or a list of ints")
-
-        return df
+        with open(self.cfg.path_save_folder / "scaler.yml", "w") as file:
+            yaml.dump(scaler, file, default_flow_style=False, sort_keys=False)
 
     def _check_dataset(self, ds: xr.Dataset):
         """Check if the dataset has the information requested in the configuration file.
@@ -1039,6 +713,157 @@ class BaseDataset(Dataset):
             )
             return False
 
+    def _create_dataset(self):
+        """Creates the dataset and keeps it in memory.
+
+        The function reads and process the data, for each entity (e.g., catchment), and store the results as an
+        in-memory `xarray.Dataset` (`self.ds_ts`) with the following structure:
+
+        - Dimensions / Coordinates:
+            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
+            - date: Time dimension.
+            - feature: Variables of interest
+        - Data Variables:
+            - data (gauge_id, date, feature): The primary data values stored as a float array.
+
+        Note: Because this function builds the entire dataset in RAM, you must have enough memory to hold the processed
+        data. If your dataset exceeds available RAM, use `create_zarr_dataset()` to write directly to disk and
+        `load_dataset` (together with configuration argument dataset_in_ram: False) to load it lazily.
+
+        """
+        self.cfg.logger.info(f"Creating {self.period} dataset in memory...")
+        processing_time = time.time()
+        # Get metadata (dates and features) from a sample to pre-allocate memory
+        dates = pd.date_range(start=self.warmup_start_date, end=self.end_date, freq=self.data_freq)
+        features = self.variables_of_interest
+
+        # Pre-allocate a 3D numpy array: (ids, dates, features)
+        data_array = np.zeros((len(self.gauge_id), len(dates), len(features)), dtype="float32")
+
+        # Process each entity using dask
+        with (
+            LocalCluster(n_workers=max(self.cfg.num_workers, 1), threads_per_worker=1) as cluster,
+            Client(cluster) as client,
+        ):
+            futures = client.map(self._process_df, self.gauge_id, extract_values=True)
+            # Create a mapping to place arrays in correct order
+            future_to_idx = {future: idx for idx, future in enumerate(futures)}
+            # Monitor progress
+            for future in tqdm(
+                as_completed(futures), total=len(futures), desc="Processing gauges", unit="entity", ascii=True
+            ):
+                idx = future_to_idx[future]
+                data_array[idx, :, :] = future.result()
+
+        # Construct xarray Dataset
+        self.ds_ts = xr.Dataset(
+            coords={
+                "gauge_id": ("gauge_id", np.array(self.gauge_id, dtype=object)),
+                "date": dates,
+                "feature": features,
+            },
+            data_vars={"data": (("gauge_id", "date", "feature"), data_array)},
+        )
+
+        self.ds_ts = self.ds_ts.chunk({"gauge_id": 1, "date": -1, "feature": -1})  # chunking helps speed up operations.
+        self.cfg.logger.info("Dataset created successfully.")
+        self.cfg.logger.info(
+            f"Time required to process {self.ds_ts.sizes['gauge_id']} gauges: "
+            f"{datetime.timedelta(seconds=int(time.time() - processing_time))}"
+        )
+
+    def _create_zarr_dataset(self):
+        """Creates the dataset and writes it directly to a zarr file on disk.
+
+        This function reads and processes the data for each entity (e.g., catchment) and stores the results,
+        sequentially, in a zarr structure with the following format:
+
+        - Dimensions / Coordinates:
+            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
+            - date: Time dimension.
+            - feature: Variables of interest
+        - Data Variables:
+            - data (gauge_id, date, feature): The primary data values stored as a float32 array.
+
+        Note: This function is designed to handle datasets larger than available RAM by writing the processed data
+        sequentially to disk.
+
+        """
+        self.cfg.logger.info("Creating zarr dataset...")
+        processing_time = time.time()
+        # Initialize zarr structure to store the processed results
+        self.path_dataset = self.cfg.path_data / f"dataset_{self.period}.zarr"
+        self._initialize_zarr()
+
+        # Create array of entities' index (used later to write the data in the right position in the zarr)
+        zarr_ids = zarr.open(self.path_dataset, mode="r")["gauge_id"][:]
+        gauge_idx = [np.where(zarr_ids == id)[0][0] for id in self.gauge_id]
+
+        # Process each entity using dask
+        with (
+            LocalCluster(n_workers=max(self.cfg.num_workers, 1), threads_per_worker=1) as cluster,
+            Client(cluster) as client,
+        ):
+            futures = client.map(self._write_df_to_zarr, self.gauge_id, gauge_idx)  # Run function
+            # Monitor progress
+            for future in tqdm(
+                as_completed(futures), total=len(futures), desc="Processing gauges", unit="entity", ascii=True
+            ):
+                future.result()
+
+        zarr.consolidate_metadata(self.path_dataset)  # consolidate metadata to optimize read performance
+        self.cfg.logger.info(f"Dataset created successfully. Zarr file can be found at {self.path_dataset}")
+        self.cfg.logger.info(
+            f"Time required to process {len(self.gauge_id)} gauges: "
+            f"{datetime.timedelta(seconds=int(time.time() - processing_time))}"
+        )
+
+    def _finalize_setup(self):
+        """Prepares the dataset for PyTorch training by optimizing memory and data access.
+
+        This method is the final step in the setup process. It takes the prepared data and formats it specifically for
+        fast loading during model training.
+
+        1. RAM Loading: If the user requested to load the dataset in RAM and we have enough RAM, we load the dataset in
+        memory, We use tensors with share_memory() to avoid memory crashes when PyTorch uses multiple workers.
+        2. Lazy Loading: If the datasets will not be loaded into RAM, we remove their reference, because we will open
+        them directly in the workers, using tensorstore engine, which speeds up the reading of the information.
+        3. Standardization: Applies the pre-calculated mean and standard deviation to the data.
+
+        """
+        if not self.dataset_in_ram:
+            # We check if the user requested to load dataset in RAM, and if so, we check if we have enough RAM.
+            if self.cfg.dataset_in_ram and self._check_ram(required_ram=self.ds_ts.nbytes):
+                self.ds_ts = self.ds_ts.compute()
+                self.dataset_in_ram = True
+            else:
+                # If we will use lazy loading, we switch to tensorstore engine, which speeds up the reading of the information. However
+                # we need to open the lazy-datasets directly into pytorch workers.
+                self.ds_ts = None
+                
+        if self.cfg.path_forecast_dataset is not None:
+            if self.cfg.forecast_dataset_in_ram and self._check_ram(required_ram=self.ds_fc.nbytes):
+                self.ds_fc = self.ds_fc.compute()
+                self.fc_in_ram = True
+            else:
+                self.ds_fc = None
+
+        # Standardize data
+        self._standardize_data()
+
+        # Converts xarray to shared memory tensors if the dataset is in RAM
+        if self.dataset_in_ram:
+            self.ds_ts = torch.from_numpy(self.ds_ts["data"].values).float()
+            self.ds_ts.share_memory_()
+
+        if self.fc_in_ram:
+            self.ds_fc = torch.from_numpy(self.ds_fc["data"].values).float()
+            self.ds_fc.share_memory_()
+
+        if self.cfg.static_input:
+            self.ds_attributes = torch.from_numpy(self.ds_attributes["data"].values).float()
+            self.ds_attributes.share_memory_()
+
     def _initialize_zarr(self):
         """Creates the zarr structure to store the data.
 
@@ -1075,6 +900,167 @@ class BaseDataset(Dataset):
         # Save zarr template to disk (at this point the zarr file is empty, but with the right structure to store the
         # processed data).
         ds_template.to_zarr(self.path_dataset, compute=False, mode="w", consolidated=False)
+
+    def _load_dataset(self, path_dataset: Optional[Path] = None, engine: str = "xarray"):
+        """Loads an existing zarr dataset from disk.
+
+        This function opens a zarr dataset and filters it to include only the gauges, time periods, and variables of
+        interest specified in the configuration file. It also performs sanity checks to ensure all requested data is
+        present.
+
+        Expected format of zarr file:
+        - Dimensions / Coordinates:
+            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
+            - date: Time dimension.
+            - feature: Variables of interest
+        - Data Variables:
+            - data (gauge_id, date, feature): The primary data values stored as a float32 array.
+
+        Parameters
+        ----------
+        path_dataset: Optional[Path]
+            If provided, the function will load the dataset from the specified path instead of the default path in the
+            configuration.
+        engine: str, default="xarray"
+            The engine to use for loading the zarr dataset.
+
+        """
+        if path_dataset is not None:
+            self.path_dataset = path_dataset
+
+        # Lazy loading of the data
+        if engine == "tensorstore":
+            ds = xarray_tensorstore.open_zarr(self.path_dataset)
+        elif engine == "xarray":
+            self.cfg.logger.info("Loading dataset from zarr...")
+            ds = xr.open_zarr(self.path_dataset, consolidated=True)
+            self._check_dataset(ds=ds)
+        else:
+            raise ValueError(f"Unknown engine: {engine}. Use 'xarray' or 'tensorstore'")
+
+        # Filter dataset based on the information requested in the configuration file (in lazy mode)
+        self.ds_ts = ds.sel(
+            gauge_id=self.gauge_id,
+            date=slice(self.warmup_start_date, self.end_date),
+            feature=self.variables_of_interest,
+        )
+
+    def _load_forecast_dataset(self, engine: str = "xarray"):
+        """Load forecast dataset from zarr file.
+
+        This function opens a zarr dataset and filters it to include only the gauges, time periods, lead_times and
+        variables of interest, specified in the configuration file. I
+
+        Expected format of zarr file:
+        - Dimensions / Coordinates:
+            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
+            - date: Time dimension.
+            - lead_time: Lead time dimension (e.g., forecast horizon).
+            - feature: Variables of interest
+        - Data Variables:
+            - data (gauge_id, date, lead_time, feature): The primary data values stored as a float32 array.
+
+        Parameters
+        ----------
+        engine: str, default="xarray"
+            The engine to use for loading the zarr dataset.
+
+        """
+        # Lazy loading of the data
+        if engine == "tensorstore":
+            ds_fc = xarray_tensorstore.open_zarr(self.cfg.path_forecast_dataset)
+        elif engine == "xarray":
+            self.cfg.logger.info("Loading forecast dataset from zarr...")
+            ds_fc = xr.open_zarr(self.cfg.path_forecast_dataset, consolidated=True)
+        else:
+            raise ValueError(f"Unknown engine: {engine}. Use 'xarray' or 'tensorstore'")
+
+        self.ds_fc = ds_fc.sel(
+            gauge_id=self.gauge_id,
+            date=slice(self.warmup_start_date, self.end_date),
+            lead_time=slice(0, self.cfg.seq_length_forecast),
+            feature=self.forecast_input,
+        )
+
+    def _load_scaler(self, path_scaler: Path | str):
+        """Load precomputed scaler.
+
+        Parameters
+        ----------
+        path_scaler: Path | str
+            Path to the .yml file containing the scaler
+
+        """
+        # Load scaler
+        with open(path_scaler, "r") as file:
+            scaler = yaml.safe_load(file)
+
+        # ----------------------------------
+        # Build scaler for dynamic variables
+        # ----------------------------------
+        dyn_keys = list(scaler["xd_mean"].keys())
+        dyn_means = [scaler["xd_mean"][k] for k in dyn_keys]
+        dyn_stds = [scaler["xd_std"][k] for k in dyn_keys]
+
+        da = xr.DataArray(
+            np.stack([dyn_means, dyn_stds], axis=0),
+            coords={"statistic": ["mean", "std"], "feature": dyn_keys},
+            dims=("statistic", "feature"),
+        )
+        self.scaler = da.to_dataset(name="data")
+
+        # ----------------------------------
+        # Build scaler for forecast
+        # ----------------------------------
+        if self.cfg.forecast_input:
+            fc_keys = list(scaler["xfc_mean"].keys())
+            fc_means = [scaler["xfc_mean"][k] for k in fc_keys]
+            fc_stds = [scaler["xfc_std"][k] for k in fc_keys]
+
+            da = xr.DataArray(
+                np.stack([fc_means, fc_stds], axis=0),
+                coords={"statistic": ["mean", "std"], "feature": fc_keys},
+                dims=("statistic", "feature"),
+            )
+            self.scaler_fc = da.to_dataset(name="data")
+
+        # ----------------------------------
+        # Build scaler for static attributes
+        # ----------------------------------
+        if self.cfg.static_input:
+            xs_keys = list(scaler["xs_mean"].keys())
+            xs_means = [scaler["xs_mean"][k] for k in xs_keys]
+            xs_stds = [scaler["xs_std"][k] for k in xs_keys]
+
+            da = xr.DataArray(
+                np.stack([xs_means, xs_stds], axis=0),
+                coords={"statistic": ["mean", "std"], "feature": xs_keys},
+                dims=("statistic", "feature"),
+            )
+            self.scaler_attributes = da.to_dataset(name="data")
+
+    def _load_valid_samples(self, path_valid_samples: Path | str):
+        """Load valid samples.
+
+        Parameters
+        ----------
+        path_valid_samples: Path | str
+            Path to the csv file containing the valid samples
+
+        """
+        self.valid_samples = np.loadtxt(
+            path_valid_samples,
+            delimiter=",",
+            dtype=[("gauge_id", "O"), ("date", "datetime64[ns]"), ("source", "O")],
+            skiprows=1,  # header
+            encoding="utf-8",
+        )
+
+        # Sort valid samples by gauge_id and date
+        self.valid_samples = np.sort(self.valid_samples, order=["gauge_id", "date"])
+
+        # Map valid samples to their corresponding indexes in the zarr structure for faster access in getitem
+        self._map_indexes()
 
     def _map_indexes(self):
         """Map gauge_id, date and feature to their corresponding indexes
@@ -1204,6 +1190,96 @@ class BaseDataset(Dataset):
     def _read_data(self) -> pd.DataFrame:
         # This function is specific for each dataset
         raise NotImplementedError
+
+    def _standardize_data(self):
+        """Standardize the data using the previously-computed scaler."""
+
+        if self.dataset_in_ram:
+            self.ds_ts = (self.ds_ts - self.scaler.sel(statistic="mean")) / self.scaler.sel(statistic="std")
+            self.cfg.logger.info("Dataset was successfully standardized.")
+        else:
+            self.cfg.logger.info(
+                "To keep lazy loading, the data will be standardized on the fly while constructing the batches."
+            )
+
+        # Standardize forecast data (if applicable)
+        if self.forecast_input:
+            if self.fc_in_ram:
+                self.ds_fc = (self.ds_fc - self.scaler_fc.sel(statistic="mean")) / self.scaler_fc.sel(statistic="std")
+                self.cfg.logger.info("Forecast dataset was successfully standardized.")
+            else:
+                self.cfg.logger.info(
+                    "To keep lazy loading, the forecast data will be standardized on the fly while constructing the "
+                    "batches."
+                )
+
+        # Standardize static attributes
+        if self.cfg.static_input:
+            self.ds_attributes = (
+                self.ds_attributes - self.scaler_attributes.sel(statistic="mean")
+            ) / self.scaler_attributes.sel(statistic="std")
+            self.cfg.logger.info("Static attributes were successfully standardized.")
+
+    def _validate_samples(self, check_nan: bool = True):
+        """Function to construct the valid samples table.
+
+        Parameters
+        ----------
+        check_nan : Optional[bool], default=True
+            Whether to check for NaN values while processing the data. This should typically be True during training,
+            and can be set to False during evaluation (validation/testing).
+
+        """
+        processing_time = time.time()
+        self.cfg.logger.info("Validating samples...")
+        # Construct the validity mask as a lazy Dask array. This will not execute the computations yet, but will build
+        # the graph of operations to compute the validity mask.
+        logic_valid_mask = self._valid_samples_mask(check_nan=check_nan)
+
+        # Compute validation mask
+        with TqdmCallback(desc="Validating samples", unit="tasks", tqdm_class=tqdm, ascii=True):
+            valid_mask = logic_valid_mask.compute()
+
+        if self.cfg.unique_prediction_blocks:
+            # non-overlapping block indices
+            block_id = np.arange(valid_mask.sizes["date"] // self.cfg.predict_last_n) * self.cfg.predict_last_n + (
+                self.cfg.predict_last_n - 1
+            )
+            # non-overlapping mask
+            date_filter_np = np.zeros(valid_mask.sizes["date"], dtype=bool)
+            date_filter_np[block_id] = True
+            xr_date_filter = xr.DataArray(date_filter_np, dims=["date"], coords={"date": valid_mask.date})
+            # Apply mask
+            valid_mask = valid_mask & xr_date_filter
+
+        # Check for gauge_id with valid samples
+        valid_gauges = valid_mask.gauge_id[valid_mask.any(dim=["date", "source"])].values
+        self.cfg.logger.info(f"Number of gauges with valid samples: {len(valid_gauges)}")
+        invalid_gauges = valid_mask.gauge_id[~valid_mask.any(dim=["date", "source"])].values
+        if len(invalid_gauges) > 0:
+            self.cfg.logger.warning(f"Gauges without valid samples in period of interest: {', '.join(invalid_gauges)}")
+
+        # Extract valid samples (id, date, source) from the mask
+        gauge_indices, date_indices, source_indices = np.where(valid_mask.values)
+
+        # store valid samples in a structured array
+        self.valid_samples = np.empty(
+            len(gauge_indices), dtype=[("gauge_id", "O"), ("date", "datetime64[ns]"), ("source", "O")]
+        )
+        self.valid_samples["gauge_id"] = valid_mask.gauge_id.values[gauge_indices]
+        self.valid_samples["date"] = valid_mask.date.values[date_indices]
+        self.valid_samples["source"] = valid_mask.source.values[source_indices]
+        self.valid_samples = np.sort(self.valid_samples, order=["gauge_id", "date"])  # sort by gauge_id and date
+
+        self.cfg.logger.info(f"Number of valid samples: {self.valid_samples.size:_}".replace("_", " "))
+
+        # Map valid samples to their corresponding indexes in the zarr structure for faster access in getitem
+        self._map_indexes()
+        
+        self.cfg.logger.info(
+            f"Time required to validate {len(self.gauge_id)} gauges: "
+            f"{datetime.timedelta(seconds=int(time.time() - processing_time))}"
+        )
 
     def _valid_samples_mask(self, check_nan: bool = True) -> xr.DataArray:
         """Logic to check for valid samples.

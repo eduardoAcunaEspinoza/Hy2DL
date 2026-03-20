@@ -594,30 +594,24 @@ class Config(object):
         return self._prepare_path("path_data")
 
     @property
-    def path_dataset_testing(self) -> Path:
-        if self._cfg.get("path_dataset_testing"):
-            return self._prepare_path("path_dataset_testing")
-        return self.path_data / "dataset_testing.zarr"
+    def path_dataset_testing(self) -> Optional[Path]:     
+        return self._prepare_path("path_dataset_testing")
 
     @path_dataset_testing.setter
     def path_dataset_testing(self, value: str):
         self._cfg["path_dataset_testing"] = value
 
     @property
-    def path_dataset_training(self) -> Path:
-        if self._cfg.get("path_dataset_training"):
-            return self._prepare_path("path_dataset_training")
-        return self.path_data / "dataset_training.zarr"
+    def path_dataset_training(self) -> Optional[Path]:
+        return self._prepare_path("path_dataset_training")
 
     @path_dataset_training.setter
     def path_dataset_training(self, value: str):
         self._cfg["path_dataset_training"] = value
 
     @property
-    def path_dataset_validation(self) -> Path:
-        if self._cfg.get("path_dataset_validation"):
-            return self._prepare_path("path_dataset_validation")
-        return self.path_data / "dataset_validation.zarr"
+    def path_dataset_validation(self) -> Optional[Path]:
+        return self._prepare_path("path_dataset_validation")
 
     @path_dataset_validation.setter
     def path_dataset_validation(self, value: str):
@@ -673,7 +667,7 @@ class Config(object):
             folder = self.base_dir / "../results"
 
         return (folder / suffix).resolve()
-
+    
     @property
     def predict_last_n(self) -> int:
         return self._cfg.get("predict_last_n", 1)

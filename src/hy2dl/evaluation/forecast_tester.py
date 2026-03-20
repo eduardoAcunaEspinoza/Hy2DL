@@ -41,7 +41,6 @@ class ForecastTester(BaseTester):
             - date: date
             - lead_time: forecast lead time
             - feature: target variables
-            -
         - Data Variables:
             - y_sim ("gauge_id", "date", "lead_time", "feature"): model predictions.
             - y_obs ("gauge_id", "date", "feature"): observed targets.
