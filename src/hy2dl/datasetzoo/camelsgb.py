@@ -3,6 +3,7 @@ from typing import Optional
 
 import pandas as pd
 
+from collections import defaultdict
 from hy2dl.datasetzoo.basedataset import BaseDataset
 from hy2dl.utils.config import Config
 
@@ -67,10 +68,14 @@ class CAMELS_GB(BaseDataset):
         # Join all dataframes
         df_attributes = pd.concat(dfs, axis=1)
 
-        # Encode categorical attributes in case there are any
-        for column in df_attributes.columns:
-            if df_attributes[column].dtype not in ["float64", "int64"]:
-                df_attributes[column], _ = pd.factorize(df_attributes[column], sort=True)
+        # if possible, try to convert object columns to real numbers
+        for col in df_attributes.select_dtypes(include=['object']).columns:
+            df_attributes[col] = pd.to_numeric(df_attributes[col], errors='coerce')
+            
+        # encoding loop
+        categorical_cols = df_attributes.select_dtypes(exclude=['number']).columns
+        for column in categorical_cols:
+            df_attributes[column], _ = pd.factorize(df_attributes[column], sort=True)
 
         # Filter attributes and basins of interest
         df_attributes = df_attributes.loc[self.gauge_id, self.cfg.static_input]
@@ -95,5 +100,5 @@ class CAMELS_GB(BaseDataset):
             self.cfg.path_data / "timeseries" / f"CAMELS_GB_hydromet_timeseries_{gauge_id}_19701001-20150930.csv"
         )
         # load time series
-        df = pd.read_csv(path_timeseries, index_col="date", parse_dates=["date"])
+        df = pd.read_csv(path_timeseries, index_col="date", parse_dates=["date"], dtype= defaultdict(lambda: "float32", date=str))
         return df

@@ -4,6 +4,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from collections import defaultdict
 from hy2dl.datasetzoo.camelsus import CAMELS_US
 from hy2dl.utils.config import Config
 
@@ -102,7 +103,7 @@ class Hourly_CAMELS_US(CAMELS_US):
         """
         path_timeseries = self.cfg.path_data / "hourly" / f"{forcing}" / f"{gauge_id}_hourly_nldas.csv"
         # load time series
-        df = pd.read_csv(path_timeseries, index_col=["date"], parse_dates=["date"])
+        df = pd.read_csv(path_timeseries, index_col=["date"], parse_dates=["date"], dtype= defaultdict(lambda: "float32", date=str))
 
         return df
 

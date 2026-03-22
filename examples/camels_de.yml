@@ -46,7 +46,6 @@ learning_rate: 0.001
 steplr_step_size: 10
 steplr_gamma: 0.5
 validate_every: 4
-validate_n_random_basins: -1
 device: gpu
 num_workers: 4
 random_seed: 110

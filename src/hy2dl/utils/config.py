@@ -150,7 +150,7 @@ class Config(object):
             if not fi_values.isdisjoint(pfi):
                 raise ValueError("Values from `pseudo_forecast_input` and `forecast_input` must be different.")
 
-        # 4. Dimension checks
+        # 5. Dimension checks
         if not has_embedding:
             if pfi and len(pfi) != len(di):
                 raise ValueError(
@@ -164,22 +164,35 @@ class Config(object):
                     "This is supported only if `dynamic_embedding` is specified."
                 )
 
-        # Join forecast signals into single variable
+        # Join forecast signals into single variable. I also evaluate if the forecast signals should later be used on a
+        # single embedding network or not. We use a single embedding if we only have one forecast type (e.g., only
+        # pseudo-forecast) or if the two signals are identical.
         if not fi:
             self.forecast_signals = pfi
+            self.merge_forecast_signal = True
         elif not pfi:
             self.forecast_signals = fi
+            self.merge_forecast_signal = True
         elif isinstance(pfi, dict) and isinstance(fi, dict):
             self.forecast_signals = {**pfi, **fi}
+            self.merge_forecast_signal = False
         elif isinstance(pfi, dict) and isinstance(fi, list):
             self.forecast_signals = {**pfi, "forecast": fi}
+            self.merge_forecast_signal = False
         elif isinstance(fi, dict) and isinstance(pfi, list):
             self.forecast_signals = {**fi, "pseudo_forecast": pfi}
+            self.merge_forecast_signal = False
         elif isinstance(pfi, list) and isinstance(fi, list):
             if pfi == fi:
                 self.forecast_signals = pfi
+                self.merge_forecast_signal = True
             else:
                 self.forecast_signals = {"pseudo_forecast": pfi, "forecast": fi}
+                self.merge_forecast_signal = False
+
+        # Check forecast configuration
+        if self.forecast_signals and self.seq_length_forecast == 0:
+            raise ValueError("Running models in forecast mode requires `seq_length_forecast > 0`")
 
     def _check_metrics(self):
         """Check that the specified metrics are supported."""
@@ -226,11 +239,6 @@ class Config(object):
 
     def _check_models(self):
         """Check for specific configurations required by certain models."""
-        # Check forecast configuration
-        if self.model == "forecast_lstm" and (self.seq_length_forecast == 0 or len(self.pseudo_forecast_input) == 0):
-            raise ValueError(
-                "`forecast_lstm` requires `seq_length_forecast > 0` and `pseudo_forecast_input` to be specified."
-            )
         if self.model == "hybrid" and (self.conceptual_model is None or self.dynamic_input_conceptual_model is None):
             raise ValueError(
                 "`hybrid` model requires `conceptual_model` and `dynamic_input_conceptual_model` to be specified."
@@ -594,7 +602,7 @@ class Config(object):
         return self._prepare_path("path_data")
 
     @property
-    def path_dataset_testing(self) -> Optional[Path]:     
+    def path_dataset_testing(self) -> Optional[Path]:
         return self._prepare_path("path_dataset_testing")
 
     @path_dataset_testing.setter
@@ -667,7 +675,7 @@ class Config(object):
             folder = self.base_dir / "../results"
 
         return (folder / suffix).resolve()
-    
+
     @property
     def predict_last_n(self) -> int:
         return self._cfg.get("predict_last_n", 1)

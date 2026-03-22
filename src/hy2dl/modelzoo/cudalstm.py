@@ -8,22 +8,32 @@ from hy2dl.utils.config import Config
 
 
 class CudaLSTM(nn.Module):
-    """LSTM model.
+    """LSTM model supporting both hindcast and forecast modes.
 
-    This class implements an LSTM layer followed by a linear head, which maps the
-    hidden states produced by the LSTM into predictions for the specified time steps.
+    This class implements an LSTM layer followed by a linear head, which maps the hidden states produced by the LSTM
+    into predictions. Depending on the configuration, it operates in either a standard mode (hindcast only) or a
+    forecast mode. In forecast mode, the LSTM cell rolls out continuously through both the hindcast and forecast periods
+    using specific embedding layers for each case.
 
     Parameters
     ----------
     cfg : Config
         Configuration object containing model hyperparameters and settings.
+        If `cfg.forecast_signals` is not None, the model automatically initializes
+        the necessary layers to support forecast mode.
     """
 
     def __init__(self, cfg: Config):
         super().__init__()
 
-        # Embedding network
+        # Embedding network hindcast period
         self.embedding_hindcast = InputLayer(cfg)
+
+        # Embedding network forecast period, if neccesary
+        self.forecast_mode = False
+        if cfg.forecast_signals:
+            self.forecast_mode = True
+            self.embedding_forecast = InputLayer(cfg, embedding_type="forecast")
 
         # LSTM
         self.lstm = nn.LSTM(
@@ -42,13 +52,16 @@ class CudaLSTM(nn.Module):
             self.lstm.bias_hh_l0.data[cfg.hidden_size : 2 * cfg.hidden_size] = cfg.initial_forget_bias
 
     def forward(self, sample: dict[str, Any]) -> dict[str, torch.Tensor]:
-        """Forward pass of lstm network
+        """Forward pass of the LSTM network.
+
+        Processes hindcast features, and optionally concatenates forecast features along the sequence dimension, before
+        passing them through the LSTM and linear head.
 
         Parameters
         ----------
         sample: dict[str, Any]
-            Dictionary with the different variables that will be used in the forward pass,
-            see `hy2dl.datasetzoo.basedataset.Basedataset.__getitems__()` for details.
+            Dictionary with the different variables that will be used in the forward pass.
+            See `hy2dl.datasetzoo.basedataset.Basedataset.__getitems__()` for details.
 
         Returns
         -------
@@ -60,12 +73,16 @@ class CudaLSTM(nn.Module):
         -----
         Shape abbreviations used:
         - B: batch size
-        - S: sequence length hindcast period.
+        - ST: length of the target sequence, based on `predict_last_n` cofiguration argument
         - N: number of target variables
 
         """
         # Preprocess data for hindcast period
         x_lstm = self.embedding_hindcast(sample)
+
+        if self.forecast_mode:
+            x_fc = self.embedding_forecast(sample)
+            x_lstm = torch.cat((x_lstm, x_fc), dim=1)
 
         # Forward pass through the LSTM
         hs, _ = self.lstm(x_lstm)

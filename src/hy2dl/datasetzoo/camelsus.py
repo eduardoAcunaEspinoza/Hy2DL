@@ -75,10 +75,14 @@ class CAMELS_US(BaseDataset):
         df["huc"] = df["huc_02"].apply(lambda x: str(x).zfill(2))
         df = df.drop("huc_02", axis=1)
 
-        # Encode categorical attributes in case there are any
-        for column in df.columns:
-            if df[column].dtype not in ["float64", "int64"]:
-                df[column], _ = pd.factorize(df[column], sort=True)
+        # if possible, try to convert object columns to real numbers
+        for col in df.select_dtypes(include=['object']).columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+        # encoding loop
+        categorical_cols = df.select_dtypes(exclude=['number']).columns
+        for column in categorical_cols:
+            df[column], _ = pd.factorize(df[column], sort=True)
 
         # Filter attributes and basins of interest
         df = df.loc[self.gauge_id, self.cfg.static_input]

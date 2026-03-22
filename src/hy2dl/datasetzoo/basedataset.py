@@ -1,5 +1,6 @@
 import datetime
 import time
+import warnings
 from pathlib import Path
 from typing import Any, Optional
 
@@ -13,10 +14,11 @@ import xarray_tensorstore
 import yaml
 import zarr
 from dask.distributed import Client, LocalCluster, as_completed
-from hy2dl.utils.config import Config
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from tqdm.dask import TqdmCallback
+
+from hy2dl.utils.config import Config
 
 
 class BaseDataset(Dataset):
@@ -86,16 +88,6 @@ class BaseDataset(Dataset):
         # input for pseudo-forecast and/or forecast period
         self.pseudo_forecast_input = BaseDataset.unique_values(x=self.cfg.pseudo_forecast_input)
         self.forecast_input = BaseDataset.unique_values(x=self.cfg.forecast_input)
-
-        # I merge the forecast inputs if they are identical (same variables for both cases) or if we only have one
-        # forecast type (e.g., only pseudo-forecast or only forecast inputs)
-        self.merge_forecast_signal = False
-        if (
-            self.pseudo_forecast_input == self.forecast_input
-            or self.pseudo_forecast_input == []
-            or self.forecast_input == []
-        ):
-            self.merge_forecast_signal = True
 
         ### -----------------------------------------------
         ### Read sample dataset to get metadata of interest
@@ -205,12 +197,13 @@ class BaseDataset(Dataset):
         - NS: number of static inputs
 
         """
+        # If we are loading data lazily from disk, we do the lazy loading directly pytorch´s workers.
         if not self.dataset_in_ram and getattr(self, "ds_ts", None) is None:
             self._load_dataset(engine="tensorstore")
 
         if self.cfg.path_forecast_dataset is not None and not self.fc_in_ram and getattr(self, "ds_fc", None) is None:
             self._load_forecast_dataset(engine="tensorstore")
-            
+
         sample = {}
         # Valid samples
         valid_sample = self.valid_samples[indices]
@@ -384,7 +377,7 @@ class BaseDataset(Dataset):
         # Forecast period
         # --------------------------
         if self.cfg.pseudo_forecast_input or self.cfg.forecast_input:
-            if self.merge_forecast_signal:  # If I need to combine the pseudo-forecast and forecast
+            if self.cfg.merge_forecast_signal:  # If I need to combine the pseudo-forecast and forecast
                 shared_vars = self.pseudo_forecast_input if self.pseudo_forecast_input else self.forecast_input
                 x_tensor = torch.full(
                     size=(len(id_idx_fc), self.cfg.seq_length_forecast, len(shared_vars)),
@@ -465,15 +458,23 @@ class BaseDataset(Dataset):
         path_scaler: Optional[Path | str] = None,
         path_validate_samples: Optional[Path | str] = None,
     ):
-        """Runs the complete setup process to get your data ready for training or evaluation.
+        """Get data ready for training or evaluation.
 
-        This is the main function you should call to initialize your dataset. It goes through multiple steps to build,
-        validate, and format your data before the model can use it.
+        This is the function you should call to load and process the dataset, and get it ready for use. It process,
+        validates, maps, standardizes, and optimizes the dataset that will be sent to the model.
 
-        The setup checklist happens in this exact order:
-        1. Load Data: It either builds your dataset from scratch or loads an existing one from your hard drive.
-        2. Validate Samples: Check validity of the data.
-        3. Calculate Stats: Calculate data statistics that are used for standardization.
+        The setup follows these step:
+        1. Load Data: Either processes the dataset from scratch or loads an existing pre-processed one. Processing the
+        dataset is done in `_process_df` and includes
+            - reading the raw data
+            - selecting the time periods and variables of interest
+            - adding additional and lagged features (if specified)
+            - reindexing the data to have a continuous time index.
+        2. Validate Samples: Look for valid samples or load a pre-computed list. Criteria for valid samples is defined
+        in `_valid_samples_mask`.
+        3. Map indexes: Map the valid samples to the corresponding indexes in the dataset. This is necessary for
+        efficient data loading during training.
+        3. Calculate statistics: Calculate data statistics that are used for standardization.
         4. Finalize: runs `_finalize_setup()` to optimize memory and data access speed.
 
         Parameters
@@ -486,8 +487,9 @@ class BaseDataset(Dataset):
             Path to a saved CSV file that lists all the valid samples.
 
         """
+        processing_time = time.time()
         # Check if path to existing dataset was specified in config
-        _not_dataset = getattr(self.cfg, f"path_dataset_{self.period}") is None
+        _load_existing_dataset = getattr(self.cfg, f"path_dataset_{self.period}") is not None
         # Check if we are in training mode
         _is_training = self.period == "training"
         if not _is_training and not path_scaler:
@@ -495,14 +497,15 @@ class BaseDataset(Dataset):
                 "When dataset for validation or testing is being created, argument `path_scaler` should be provided"
             )
         # --------------------------
-        # Load dataset of observed data
+        # Create or load dataset of observed data
         # --------------------------
         # Create dataset in RAM
-        if _not_dataset and self.cfg.dataset_in_ram:
+        if not _load_existing_dataset and self.cfg.dataset_in_ram:
             self._create_dataset()
             self.dataset_in_ram = True
         else:
-            if _not_dataset:  # Create zarr dataset and load it lazily
+            # Create zarr dataset in disk and load it lazily
+            if not _load_existing_dataset:
                 self._create_zarr_dataset()
                 self._load_dataset(path_dataset=self.path_dataset)
             else:  # Load existing zarr dataset lazily
@@ -538,13 +541,18 @@ class BaseDataset(Dataset):
         # --------------------------
         # Additional variables
         # --------------------------
-        if self.cfg.loss == "nse_basin_averaged":
+        if self.period == "training" and self.cfg.loss == "nse_basin_averaged":
             self._calculate_basin_std()
 
         # --------------------------
         # Finalize dataset setup
         # --------------------------
         self._finalize_setup()
+        
+        self.cfg.logger.info(
+            f"Time required to process the dataset: "
+            f"{datetime.timedelta(seconds=int(time.time() - processing_time))}"
+        )
 
     def _add_lagged_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add lagged input features to dataframe.
@@ -583,9 +591,11 @@ class BaseDataset(Dataset):
             Hydrology and Earth System Sciences*, 2019, 23, 5089-5110, doi:10.5194/hess-23-5089-2019
 
         """
-        basin_std = self.ds_ts["data"].sel(feature=self.cfg.target).std(dim=["date"])
-        self.basin_std = torch.tensor(basin_std.values, dtype=torch.float32)
-        self.basin_std.share_memory_()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            basin_std = self.ds_ts["data"].sel(feature=self.cfg.target).std(dim=["date"], skipna=True)
+            self.basin_std = torch.tensor(basin_std.values, dtype=torch.float32)
+            self.basin_std.share_memory_()
 
     def _calculate_scaler(self):
         """Calculate data statistics"""
@@ -593,10 +603,13 @@ class BaseDataset(Dataset):
         ### ------------------
         ### Dynamic variables
         ### ------------------
-        # Calculate mean
-        xd_mean = self.ds_ts.mean(dim=["gauge_id", "date"], skipna=True).fillna(0.0)
-        # Calculate std
-        xd_std = self.ds_ts.std(dim=["gauge_id", "date"], skipna=True)
+        # Calculate mean of variables using all the gauges that will be used for training (self.valid_gauges). In case
+        # we get a NaN value for the mean, we replace it with 0.0, to avoid affecting the standardization.
+        xd_mean = self.ds_ts.sel(gauge_id=self.valid_gauges).mean(dim=["gauge_id", "date"], skipna=True).fillna(0.0)
+        # Calculate standard deviation of variables using all the gauges that will be used for training
+        # (self.valid_gauges). In case we get a NaN or really small values, we replace it with 1.0, to avoid affecting
+        # the standardization.
+        xd_std = self.ds_ts.sel(gauge_id=self.valid_gauges).std(dim=["gauge_id", "date"], skipna=True)
         xd_std = xd_std.where((xd_std.notnull()) & (xd_std >= 1e-5), 1.0)
         # Combine into one and computes the values
         self.scaler = xr.concat([xd_mean, xd_std], dim="statistic")
@@ -607,8 +620,12 @@ class BaseDataset(Dataset):
         ### Forecast variables
         ### ------------------
         if self.cfg.forecast_input:
-            xfc_mean = self.ds_fc.mean(dim=["gauge_id", "date", "lead_time"], skipna=True).fillna(0.0)
-            xfc_std = self.ds_fc.std(dim=["gauge_id", "date", "lead_time"], skipna=True)
+            xfc_mean = (
+                self.ds_fc.sel(gauge_id=self.valid_gauges)
+                .mean(dim=["gauge_id", "date", "lead_time"], skipna=True)
+                .fillna(0.0)
+            )
+            xfc_std = self.ds_fc.sel(gauge_id=self.valid_gauges).std(dim=["gauge_id", "date", "lead_time"], skipna=True)
             xfc_std = xfc_std.where((xfc_std.notnull()) & (xfc_std >= 1e-5), 1.0)
             # Combine into one and computes the values
             self.scaler_fc = xr.concat([xfc_mean, xfc_std], dim="statistic")
@@ -619,8 +636,8 @@ class BaseDataset(Dataset):
         ### Static attributes
         ### ------------------
         if self.cfg.static_input:
-            xs_mean = self.ds_attributes.mean(dim=["gauge_id"], skipna=True).fillna(0.0)
-            xs_std = self.ds_attributes.std(dim=["gauge_id"], skipna=True)
+            xs_mean = self.ds_attributes.sel(gauge_id=self.valid_gauges).mean(dim=["gauge_id"], skipna=True).fillna(0.0)
+            xs_std = self.ds_attributes.sel(gauge_id=self.valid_gauges).std(dim=["gauge_id"], skipna=True)
             xs_std = xs_std.where(xs_std.notnull() & (xs_std >= 1e-5), 1.0)
             self.scaler_attributes = xr.concat([xs_mean, xs_std], dim="statistic")
             self.scaler_attributes = self.scaler_attributes.assign_coords(statistic=["mean", "std"])
@@ -654,7 +671,7 @@ class BaseDataset(Dataset):
         Parameters
         ----------
         ds : xr.Dataset
-            Lazy view of the dataset (not uploaded into memory)
+            Lazy view of the dataset
 
         Raises
         ------
@@ -678,7 +695,7 @@ class BaseDataset(Dataset):
                 f"Please remove them from variables_of_interest or include the information in the dataset."
             )
 
-        # Check if all elements of required_dates exist in ds_date
+        # Check if all dates exist in ds_date
         date_range = pd.date_range(start=self.warmup_start_date, end=self.end_date, freq=self.data_freq)
         if not np.isin(date_range, ds["date"].values).all():
             missing = np.setdiff1d(date_range, ds["date"].values)
@@ -727,12 +744,11 @@ class BaseDataset(Dataset):
             - data (gauge_id, date, feature): The primary data values stored as a float array.
 
         Note: Because this function builds the entire dataset in RAM, you must have enough memory to hold the processed
-        data. If your dataset exceeds available RAM, use `create_zarr_dataset()` to write directly to disk and
-        `load_dataset` (together with configuration argument dataset_in_ram: False) to load it lazily.
+        data.
 
         """
         self.cfg.logger.info(f"Creating {self.period} dataset in memory...")
-        processing_time = time.time()
+        
         # Get metadata (dates and features) from a sample to pre-allocate memory
         dates = pd.date_range(start=self.warmup_start_date, end=self.end_date, freq=self.data_freq)
         features = self.variables_of_interest
@@ -767,10 +783,6 @@ class BaseDataset(Dataset):
 
         self.ds_ts = self.ds_ts.chunk({"gauge_id": 1, "date": -1, "feature": -1})  # chunking helps speed up operations.
         self.cfg.logger.info("Dataset created successfully.")
-        self.cfg.logger.info(
-            f"Time required to process {self.ds_ts.sizes['gauge_id']} gauges: "
-            f"{datetime.timedelta(seconds=int(time.time() - processing_time))}"
-        )
 
     def _create_zarr_dataset(self):
         """Creates the dataset and writes it directly to a zarr file on disk.
@@ -790,7 +802,6 @@ class BaseDataset(Dataset):
 
         """
         self.cfg.logger.info("Creating zarr dataset...")
-        processing_time = time.time()
         # Initialize zarr structure to store the processed results
         self.path_dataset = self.cfg.path_data / f"dataset_{self.period}.zarr"
         self._initialize_zarr()
@@ -813,10 +824,6 @@ class BaseDataset(Dataset):
 
         zarr.consolidate_metadata(self.path_dataset)  # consolidate metadata to optimize read performance
         self.cfg.logger.info(f"Dataset created successfully. Zarr file can be found at {self.path_dataset}")
-        self.cfg.logger.info(
-            f"Time required to process {len(self.gauge_id)} gauges: "
-            f"{datetime.timedelta(seconds=int(time.time() - processing_time))}"
-        )
 
     def _finalize_setup(self):
         """Prepares the dataset for PyTorch training by optimizing memory and data access.
@@ -825,22 +832,24 @@ class BaseDataset(Dataset):
         fast loading during model training.
 
         1. RAM Loading: If the user requested to load the dataset in RAM and we have enough RAM, we load the dataset in
-        memory, We use tensors with share_memory() to avoid memory crashes when PyTorch uses multiple workers.
-        2. Lazy Loading: If the datasets will not be loaded into RAM, we remove their reference, because we will open
-        them directly in the workers, using tensorstore engine, which speeds up the reading of the information.
-        3. Standardization: Applies the pre-calculated mean and standard deviation to the data.
+        memory, standardize it, and transform it into share_memory() tensors to avoid memory crashes when PyTorch uses
+        multiple workers.
+        2. Lazy Loading: If the datasets will not be loaded into RAM, we remove their reference (set it to None),
+        because we will re-open their reference directly in the PyTorch workers using tensorstore engine, which speeds
+        up the reading of the information and avoid fork/spawn issues.
 
         """
+        # If we still do not have the dataset in RAM is because we did a lazy loading of an existing dataset. If the
+        # user requested to load the dataset in RAM, we check if we have enough RAM to do it and if so, we load it.
+        # Otherwise, we remove the reference, to re-open it directly in the workers using tensorstore.
         if not self.dataset_in_ram:
-            # We check if the user requested to load dataset in RAM, and if so, we check if we have enough RAM.
             if self.cfg.dataset_in_ram and self._check_ram(required_ram=self.ds_ts.nbytes):
                 self.ds_ts = self.ds_ts.compute()
                 self.dataset_in_ram = True
             else:
-                # If we will use lazy loading, we switch to tensorstore engine, which speeds up the reading of the information. However
-                # we need to open the lazy-datasets directly into pytorch workers.
                 self.ds_ts = None
-                
+
+        # If we have a forecast dataset, we do the same for it.
         if self.cfg.path_forecast_dataset is not None:
             if self.cfg.forecast_dataset_in_ram and self._check_ram(required_ram=self.ds_fc.nbytes):
                 self.ds_fc = self.ds_fc.compute()
@@ -927,11 +936,12 @@ class BaseDataset(Dataset):
         """
         if path_dataset is not None:
             self.path_dataset = path_dataset
+        else:
+            self.path_dataset = self.cfg.path_data / f"dataset_{self.period}.zarr"
 
-        # Lazy loading of the data
-        if engine == "tensorstore":
+        if engine == "tensorstore":  # used for batch construction
             ds = xarray_tensorstore.open_zarr(self.path_dataset)
-        elif engine == "xarray":
+        elif engine == "xarray":  # used for data processing and validation
             self.cfg.logger.info("Loading dataset from zarr...")
             ds = xr.open_zarr(self.path_dataset, consolidated=True)
             self._check_dataset(ds=ds)
@@ -966,10 +976,9 @@ class BaseDataset(Dataset):
             The engine to use for loading the zarr dataset.
 
         """
-        # Lazy loading of the data
-        if engine == "tensorstore":
+        if engine == "tensorstore":  # used for batch construction
             ds_fc = xarray_tensorstore.open_zarr(self.cfg.path_forecast_dataset)
-        elif engine == "xarray":
+        elif engine == "xarray":  # used for data processing and validation
             self.cfg.logger.info("Loading forecast dataset from zarr...")
             ds_fc = xr.open_zarr(self.cfg.path_forecast_dataset, consolidated=True)
         else:
@@ -996,7 +1005,7 @@ class BaseDataset(Dataset):
             scaler = yaml.safe_load(file)
 
         # ----------------------------------
-        # Build scaler for dynamic variables
+        # Re-build scaler for dynamic variables
         # ----------------------------------
         dyn_keys = list(scaler["xd_mean"].keys())
         dyn_means = [scaler["xd_mean"][k] for k in dyn_keys]
@@ -1010,7 +1019,7 @@ class BaseDataset(Dataset):
         self.scaler = da.to_dataset(name="data")
 
         # ----------------------------------
-        # Build scaler for forecast
+        # Re-build scaler for forecast
         # ----------------------------------
         if self.cfg.forecast_input:
             fc_keys = list(scaler["xfc_mean"].keys())
@@ -1025,7 +1034,7 @@ class BaseDataset(Dataset):
             self.scaler_fc = da.to_dataset(name="data")
 
         # ----------------------------------
-        # Build scaler for static attributes
+        # Re-build scaler for static attributes
         # ----------------------------------
         if self.cfg.static_input:
             xs_keys = list(scaler["xs_mean"].keys())
@@ -1040,7 +1049,7 @@ class BaseDataset(Dataset):
             self.scaler_attributes = da.to_dataset(name="data")
 
     def _load_valid_samples(self, path_valid_samples: Path | str):
-        """Load valid samples.
+        """Load precomputed valid-samples.
 
         Parameters
         ----------
@@ -1066,9 +1075,8 @@ class BaseDataset(Dataset):
         """Map gauge_id, date and feature to their corresponding indexes
 
         This function creates the mapping between gauge_id, date and features to their corresponding indexes in the
-        dataset. This is done to speed up th __getitem__ function and index the data based on their indexes instead of
-        their values. Depending on the source of the valid samples (obs or forecast), the index-mapping is done to a
-        different dataset.
+        dataset. This is done to speed up the __getitems__ function. Depending on the source of the valid samples
+        (obs or forecast), the index-mapping is done to a different dataset.
 
         """
         self.cfg.logger.info("Mapping ids, dates and features to their corresponding indexes")
@@ -1136,6 +1144,7 @@ class BaseDataset(Dataset):
             return pd.to_datetime(date_str, format="%Y-%m-%d %H:%M:%S")
 
     def _process_attributes(self):
+        """Read and process static attributes."""
         if self.cfg.static_input:
             ds_attributes = self._read_attributes().to_xarray()
             self.ds_attributes = (
@@ -1164,12 +1173,13 @@ class BaseDataset(Dataset):
         # Load time series for specific catchment id
         df_ts = self._read_data(gauge_id=gauge_id)
 
+        # Load additional features, if applicable, and concatenate them to the main dataframe
         if self.cfg.path_additional_features:
             ds_additional_features = xarray_tensorstore.open_zarr(self.cfg.path_additional_features)
             df_additional_features = ds_additional_features.sel(gauge_id=gauge_id)["data"].to_pandas()
             df_ts = pd.concat([df_ts, df_additional_features], axis=1)
 
-        # In case we need to add lagged features
+        # Add lagged features, if aplicable.
         if isinstance(self.cfg.lagged_features, dict):
             df_ts = self._add_lagged_features(df=df_ts)
 
@@ -1194,6 +1204,7 @@ class BaseDataset(Dataset):
     def _standardize_data(self):
         """Standardize the data using the previously-computed scaler."""
 
+        # If observed dataset is in RAM, standardize it
         if self.dataset_in_ram:
             self.ds_ts = (self.ds_ts - self.scaler.sel(statistic="mean")) / self.scaler.sel(statistic="std")
             self.cfg.logger.info("Dataset was successfully standardized.")
@@ -1202,7 +1213,7 @@ class BaseDataset(Dataset):
                 "To keep lazy loading, the data will be standardized on the fly while constructing the batches."
             )
 
-        # Standardize forecast data (if applicable)
+        # If forecast dataset exist and is in RAM, standardize it
         if self.forecast_input:
             if self.fc_in_ram:
                 self.ds_fc = (self.ds_fc - self.scaler_fc.sel(statistic="mean")) / self.scaler_fc.sel(statistic="std")
@@ -1213,7 +1224,7 @@ class BaseDataset(Dataset):
                     "batches."
                 )
 
-        # Standardize static attributes
+        # If we have static attributes, standardize them
         if self.cfg.static_input:
             self.ds_attributes = (
                 self.ds_attributes - self.scaler_attributes.sel(statistic="mean")
@@ -1230,7 +1241,6 @@ class BaseDataset(Dataset):
             and can be set to False during evaluation (validation/testing).
 
         """
-        processing_time = time.time()
         self.cfg.logger.info("Validating samples...")
         # Construct the validity mask as a lazy Dask array. This will not execute the computations yet, but will build
         # the graph of operations to compute the validity mask.
@@ -1240,6 +1250,7 @@ class BaseDataset(Dataset):
         with TqdmCallback(desc="Validating samples", unit="tasks", tqdm_class=tqdm, ascii=True):
             valid_mask = logic_valid_mask.compute()
 
+        # If the user requested to have unique prediction blocks (non-overlapping samples)
         if self.cfg.unique_prediction_blocks:
             # non-overlapping block indices
             block_id = np.arange(valid_mask.sizes["date"] // self.cfg.predict_last_n) * self.cfg.predict_last_n + (
@@ -1253,8 +1264,8 @@ class BaseDataset(Dataset):
             valid_mask = valid_mask & xr_date_filter
 
         # Check for gauge_id with valid samples
-        valid_gauges = valid_mask.gauge_id[valid_mask.any(dim=["date", "source"])].values
-        self.cfg.logger.info(f"Number of gauges with valid samples: {len(valid_gauges)}")
+        self.valid_gauges = valid_mask.gauge_id[valid_mask.any(dim=["date", "source"])].values
+        self.cfg.logger.info(f"Number of gauges with valid samples: {len(self.valid_gauges)}")
         invalid_gauges = valid_mask.gauge_id[~valid_mask.any(dim=["date", "source"])].values
         if len(invalid_gauges) > 0:
             self.cfg.logger.warning(f"Gauges without valid samples in period of interest: {', '.join(invalid_gauges)}")
@@ -1275,11 +1286,6 @@ class BaseDataset(Dataset):
 
         # Map valid samples to their corresponding indexes in the zarr structure for faster access in getitem
         self._map_indexes()
-        
-        self.cfg.logger.info(
-            f"Time required to validate {len(self.gauge_id)} gauges: "
-            f"{datetime.timedelta(seconds=int(time.time() - processing_time))}"
-        )
 
     def _valid_samples_mask(self, check_nan: bool = True) -> xr.DataArray:
         """Logic to check for valid samples.
@@ -1303,11 +1309,10 @@ class BaseDataset(Dataset):
         def _check_vars(
             var_list: list[str], window_size: int, shift_val: int = 0, any_nan: bool = True
         ) -> xr.DataArray:
-            """Helper function to check a list of variables for NaNs over a rolling window.
+            """Helper function to check a list of variables for NaNs over a window of a given size.
 
             This function checks if there are any NaN values in the specified variables, over a rolling window of a
-            given size. We used it as a nested-function because 'check_vars'  is only relevant within the context of
-            'get_validity_mask'.
+            given size.
 
             Parameters
             ----------
@@ -1324,34 +1329,38 @@ class BaseDataset(Dataset):
             Returns
             -------
             valid_mask: xr.DataArray
-                A boolean mask (gauge_id, date) where True indicates valid samples (no NaNs in the window)
+                A boolean mask (gauge_id, date) where True indicates valid sample
 
             """
             # Select variables and convert to single DataArray
             ds_subset = self.ds_ts["data"].sel(feature=var_list)
 
             # Check NaNs across variables
-            valid_target = ds_subset.isnull().any(dim="feature") if any_nan else ds_subset.notnull().any(dim="feature")
+            is_invalid = ds_subset.isnull().any(dim="feature") if any_nan else ds_subset.isnull().all(dim="feature")
 
             # Rolling count of NaNs
-            valid_targets_in_window = valid_target.rolling(
+            invalid_targets_in_window = is_invalid.rolling(
                 date=window_size, center=False, min_periods=window_size
             ).sum()
-            valid_mask = valid_targets_in_window == 0 if any_nan else valid_targets_in_window > 0
 
-            if shift_val != 0:  # Shift if checking a sub-segment that ends before the full sequence end
+            valid_mask = invalid_targets_in_window == 0 if any_nan else invalid_targets_in_window < window_size
+
+            # Shift if checking a sub-segment that ends displaced from the valid sample index (e.g., when we have
+            # multiple frequencies or pseudo-forecast input)
+            if shift_val != 0:
                 valid_mask = valid_mask.shift(date=shift_val, fill_value=False)
 
             return valid_mask
 
         def _check_forecast_vars(var_list: list[str]) -> xr.DataArray:
+            """Helper function to check a list of variables for NaNs over lead_time dimension"""
             ds_subset = self.ds_fc["data"].sel(feature=var_list).isel(lead_time=slice(0, self.cfg.seq_length_forecast))
-            mask = ds_subset.notnull().all(dim=["feature", "lead_time"])
-            return mask
+            valid_mask = ds_subset.notnull().all(dim=["feature", "lead_time"])
+            return valid_mask
 
         def _check_groups(
             group_vars: dict[str, list[str]],
-            window_size: int = 0,
+            window_size: int = 1,
             shift_val: int = 0,
             source: str = "obs",
             any_nan: bool = True,
@@ -1367,7 +1376,7 @@ class BaseDataset(Dataset):
             ----------
             group_vars: dict[str, list[str]]
                 Dictionary where keys are group names and values are lists of variable names to check.
-            window_size: int
+            window_size: int, default=1
                 Size of the rolling window (e.g., sequence length).
             shift_val: int, default=0
                 Number of steps to shift the resulting mask. This is useful when checking sub-segments that end before
@@ -1400,9 +1409,9 @@ class BaseDataset(Dataset):
                     )
 
             # Mask considering all groups: True if at least one group valid AND all mandatory groups valid
-            mask = mask_groups if mask_mandatory_groups is None else (mask_groups & mask_mandatory_groups)
+            valid_mask = mask_groups if mask_mandatory_groups is None else (mask_groups & mask_mandatory_groups)
 
-            return mask
+            return valid_mask
 
         # -------------------------
         # Initialize mask
@@ -1564,7 +1573,7 @@ class BaseDataset(Dataset):
         gauge_id : str
             Id of the gauge to be processed and stored in the zarr structure.
         gauge_idx: int
-            Index of the gauge in the zarr structure (used to write the data in the right position in the zarr file).
+            Index of the gauge in the zarr structure (we use it to write the data in the right position in the zarr).
 
         """
         # Write the processed dataframe to the specific region of the existing zarr file
