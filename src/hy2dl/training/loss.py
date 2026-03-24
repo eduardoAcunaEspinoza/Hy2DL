@@ -21,7 +21,7 @@ class BaseLoss(nn.Module):
 class NLL(BaseLoss):
     """Negative log-likelihood.
 
-    Calculate negative log-likelihood i.e. the log probability of `y_obs` given a mixture distribution, applying an
+    Calculate negative log-likelihood (i.e. the log probability of `y_obs` given a mixture distribution), applying an
     optional weight to each target variable.
     """
 
