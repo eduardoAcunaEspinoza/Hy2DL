@@ -17,12 +17,12 @@ def get_loss(cfg: Config) -> loss.BaseLoss:
     """
 
     if cfg.loss.lower() == "nse_basin_averaged":
-        model = loss.NSEBasinAveraged(cfg=cfg)
+        loss = loss.NSEBasinAveraged(cfg=cfg)
     elif cfg.loss.lower() == "weighted_mse":
-        model = loss.WeightedMSE(cfg=cfg)
+        loss = loss.WeightedMSE(cfg=cfg)
     elif cfg.loss.lower() == "feng2022":
-        model = loss.Feng2022(cfg=cfg)
+        loss = loss.Feng2022(cfg=cfg)
     else:
         raise NotImplementedError(f"{cfg.loss} not implemented or not linked in `get_loss()`")
 
-    return model
+    return loss

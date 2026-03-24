@@ -164,25 +164,25 @@ class BaseDataset(Dataset):
             include:
             - x_d: dict[str, torch.Tensor]
                 Dynamic inputs in hindcast period. Keys are the variable names and the values are tensors of shape
-                (B, S).In case of multiple frequencies, one dictionary per frequency is created.
-            - y_obs: torch.Tensor, shape (B, ST, N)
+                (B, L).In case of multiple frequencies, one dictionary per frequency is created.
+            - y_obs: torch.Tensor, shape (B, N, T)
                 Target variables.
             - x_s: Optional[torch.Tensor], shape (B, NS)
                 Static inputs.
             - x_d_fc: Optional[dict[str, torch.Tensor]]
                 Dynamic inputs in forecast period. Keys are the variable names and the values are tensors of shape
-                (B, SF).
+                (B, LF).
             - source_fc: Optional[np.ndarray], shape (B,)
                 String array to differentiate the source of forecast signals: pseudoforecast ("obs") or forecast ("fc").
             - init_time_fc: Optional[np.ndarray], shape (B,)
                 Time where the forecast is emitted.
-            - persistent_q: Optional[torch.Tensor], shape (B, 1, N)
+            - persistent_q: Optional[torch.Tensor], shape (B, 1, T)
                 Target at the time the forecast is emitted.
             - gauge_id: np.ndarray, shape (B,)
                 ID of the gauge for each element of the batch.
-            - date: np.ndarray, shape (B, S)
+            - date: np.ndarray, shape (B, L)
                 Dates associated with the target.
-            - std_basin: Optional[torch.Tensor], shape (B, N)
+            - std_basin: Optional[torch.Tensor], shape (B, T)
                 Standard deviation of target variables for the training period. Necessary if one uses basin-averaged NSE
                 as a loss function.
 
@@ -190,10 +190,10 @@ class BaseDataset(Dataset):
         -----
         Shape abbreviations used:
         - B: batch size
-        - S: sequence length hindcast period.
-        - ST: length of the target sequence, based on `predict_last_n` cofiguration argument
-        - SF: length of forecast period
-        - N: number of target variables
+        - L: sequence length hindcast period.
+        - N: length of the target sequence, based on `predict_last_n` cofiguration argument
+        - LF: length of forecast period
+        - T: number of target variables
         - NS: number of static inputs
 
         """
@@ -246,8 +246,8 @@ class BaseDataset(Dataset):
             -------
             dict[str, torch.Tensor] or torch.Tensor
                 The extracted block, either as a dictionary or as a tensor
-                - dict: features names as keys, and values being the corresponding tensors of shape (B, S)
-                - tensor: a single tensor of shape (B, S, F)
+                - dict: features names as keys, and values being the corresponding tensors of shape (B, L)
+                - tensor: a single tensor of shape (B, L, F)
 
             """
             var_indices = [self.feature_to_idx["obs"][var] for var in var_list]
@@ -298,7 +298,7 @@ class BaseDataset(Dataset):
             Returns
             -------
             torch.Tensor
-                The extracted block (B, S, F)
+                The extracted block (B, L, F)
 
             """
             var_indices = [self.feature_to_idx["fc"][var] for var in var_list]

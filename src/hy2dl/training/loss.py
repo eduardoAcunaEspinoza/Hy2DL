@@ -3,6 +3,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from hy2dl.utils import get_distribution
 from hy2dl.utils.config import Config
 
 
@@ -15,6 +16,28 @@ class BaseLoss(nn.Module):
 
     def forward(self, pred: dict[str, torch.Tensor], sample: dict[str, Any]) -> torch.Tensor:
         raise NotImplementedError
+
+
+class NLL(BaseLoss):
+    """Negative log-likelihood.
+
+    Calculate negative log-likelihood i.e. the log probability of `y_obs` given a mixture distribution, applying an
+    optional weight to each target variable.
+    """
+
+    def __init__(self, cfg: Config):
+        super().__init__(cfg)
+        self.distribution = get_distribution(cfg)
+
+        if cfg.target_weights is not None:
+            self.target_weights = torch.tensor(cfg.target_weights, dtype=torch.float32, device=cfg.device)
+        else:
+            self.target_weights = torch.ones(len(cfg.target), dtype=torch.float32, device=cfg.device)
+
+    def forward(self, pred: dict[str, torch.Tensor], sample: dict[str, Any]) -> torch.Tensor:
+        log_p = self.distribution.calc_logpdf(params=pred["params"], weights=pred["weights"], x=sample["y_obs"])
+        nll = -log_p.mean(dim=(0, 1))
+        return torch.dot(nll, self.target_weights)
 
 
 class NSEBasinAveraged(BaseLoss):
@@ -80,10 +103,10 @@ class WeightedMSE(BaseLoss):
     def __init__(self, cfg: Config):
         super().__init__(cfg)
 
-        if cfg.loss_weights is not None:
-            self.weights = torch.tensor(cfg.loss_weights, dtype=torch.float32, device=cfg.device)
+        if cfg.target_weights is not None:
+            self.target_weights = torch.tensor(cfg.target_weights, dtype=torch.float32, device=cfg.device)
         else:
-            self.weights = torch.ones(len(cfg.target), dtype=torch.float32, device=cfg.device)
+            self.target_weights = torch.ones(len(cfg.target), dtype=torch.float32, device=cfg.device)
 
     def forward(self, pred: dict[str, torch.Tensor], sample: dict[str, Any]) -> torch.Tensor:
         """
@@ -103,7 +126,7 @@ class WeightedMSE(BaseLoss):
         # Extract variables of interest
         y_sim = pred["y_hat"]
         y_obs = sample["y_obs"]
-        weights = self.weights.unsqueeze(0).unsqueeze(0).expand_as(y_obs)
+        target_weights = self.target_weights.unsqueeze(0).unsqueeze(0).expand_as(y_obs)
 
         # calculate mask to avoid nan in observation to affect the loss
         mask = ~torch.isnan(y_obs)
@@ -111,10 +134,10 @@ class WeightedMSE(BaseLoss):
         # Filter nans
         y_sim_masked = y_sim[mask]
         y_obs_masked = y_obs[mask]
-        weights_masked = weights[mask]
+        target_weights_masked = target_weights[mask]
 
         # Calculate loss
         squared_error = (y_sim_masked - y_obs_masked) ** 2
-        weighted_squared_error = weights_masked * squared_error
+        weighted_squared_error = target_weights_masked * squared_error
 
         return torch.mean(weighted_squared_error)

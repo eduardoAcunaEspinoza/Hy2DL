@@ -19,8 +19,6 @@ class CudaLSTM(nn.Module):
     ----------
     cfg : Config
         Configuration object containing model hyperparameters and settings.
-        If `cfg.forecast_signals` is not None, the model automatically initializes
-        the necessary layers to support forecast mode.
     """
 
     def __init__(self, cfg: Config):
@@ -66,15 +64,15 @@ class CudaLSTM(nn.Module):
         Returns
         -------
         dict[str, torch.Tensor]
-            y_hat: model predictions, shape (B, S, N)
-            hs: hidden states of LSTM cell, shape (B, S, cfg.hidden_size)
+            y_hat: model predictions, shape (B, N, T)
+            hs: hidden states of LSTM cell, shape (B, N, cfg.hidden_size)
 
         Notes
         -----
         Shape abbreviations used:
         - B: batch size
-        - ST: length of the target sequence, based on `predict_last_n` cofiguration argument
-        - N: number of target variables
+        - N: length of the target sequence, based on `predict_last_n` cofiguration argument
+        - T: number of target variables
 
         """
         # Preprocess data for hindcast period

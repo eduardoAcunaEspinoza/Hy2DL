@@ -546,10 +546,6 @@ class Config(object):
         return self._cfg.get("loss", "nse_basin_averaged")
 
     @property
-    def loss_weights(self) -> list[float]:
-        return self._cfg.get("loss_weights")
-
-    @property
     def max_updates_per_epoch(self) -> int:
         return self._cfg.get("max_updates_per_epoch")
 
@@ -694,7 +690,7 @@ class Config(object):
 
     @property
     def output_features(self) -> int:
-        return self._cfg.get("output_features", 1)
+        return self._cfg.get("output_features", len(self.target))
 
     @property
     def ram_safety_factor(self) -> float:
@@ -754,6 +750,10 @@ class Config(object):
     @property
     def target(self) -> list[str]:
         return Config._as_default_list(self._cfg.get("target"))
+
+    @property
+    def target_weights(self) -> list[float]:
+        return self._cfg.get("target_weights")
 
     @property
     def teacher_forcing_scheduler(self) -> Optional[dict[str, float]]:
