@@ -8,12 +8,15 @@ from hy2dl.utils.config import Config
 
 
 class CudaLSTM(nn.Module):
-    """LSTM model supporting both hindcast and forecast modes.
+    """LSTM model.
 
-    This class implements an LSTM layer followed by a linear head, which maps the hidden states produced by the LSTM
-    into predictions. Depending on the configuration, it operates in either a standard mode (hindcast only) or a
-    forecast mode. In forecast mode, the LSTM cell rolls out continuously through both the hindcast and forecast periods
-    using specific embedding layers for each case.
+    This class implements an LSTM layer. If config.model == "cudalstm", the LSTM layer is followed by a linear head,
+    which maps the hidden states produced by the LSTM into predictions. Otherwise, it is assumed the model is being used
+    as part of a larger architecture, and only the hidden states are returned.
+
+    The LSTM layer can operate either in a standard mode (hindcast only) or forecast mode. In forecast mode, the LSTM
+    cell rolls out continuously through both the hindcast and forecast periods using specific embedding layers for each
+    case.
 
     Parameters
     ----------
@@ -39,7 +42,13 @@ class CudaLSTM(nn.Module):
         )
 
         self.dropout = torch.nn.Dropout(p=cfg.dropout_rate)
-        self.linear = nn.Linear(in_features=cfg.hidden_size, out_features=cfg.output_features)
+
+        # Add linear head if the LSTM layer is used as a standalone model.
+        if cfg.model == "cudalstm":
+            self.cudalstm = True
+            self.linear = nn.Linear(in_features=cfg.hidden_size, out_features=cfg.output_features)
+        else:
+            self.cudalstm = False
 
         self.predict_last_n = cfg.predict_last_n
         self._reset_parameters(cfg=cfg)
@@ -86,8 +95,6 @@ class CudaLSTM(nn.Module):
         hs, _ = self.lstm(x_lstm)
         # Extract sequence of interest
         hs = hs[:, -self.predict_last_n :, :]
-        out = self.dropout(hs)
-        # Transform the output to the desired shape using a linear layer
-        out = self.linear(out)
+        hs = self.dropout(hs)
 
-        return {"y_hat": out, "hs": hs}
+        return {"y_hat": self.linear(hs), "hs": hs} if self.cudalstm else {"hs": hs}
