@@ -76,11 +76,11 @@ class CAMELS_US(BaseDataset):
         df = df.drop("huc_02", axis=1)
 
         # if possible, try to convert object columns to real numbers
-        for col in df.select_dtypes(include=['object']).columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-            
+        for col in df.select_dtypes(include=["object"]).columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
         # encoding loop
-        categorical_cols = df.select_dtypes(exclude=['number']).columns
+        categorical_cols = df.select_dtypes(exclude=["number"]).columns
         for column in categorical_cols:
             df[column], _ = pd.factorize(df[column], sort=True)
 

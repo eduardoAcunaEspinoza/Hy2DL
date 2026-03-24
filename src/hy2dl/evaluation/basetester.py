@@ -73,8 +73,6 @@ class BaseTester(object):
             .float()
             .to(self.cfg.device)
         )
-
-        self.gauge_data = {"date": [], "y_sim": [], "y_obs": []}
         self.path_zarr = self.cfg.path_save_folder / f"{evaluation_dataset.period}_results.zarr"
         self.validation_report = ""
 
@@ -106,7 +104,7 @@ class BaseTester(object):
                 # If I am switching to a new gauge, I write the results of the previous one to disk and clear memory
                 if current_gauge is not None and batch_gauge_id != current_gauge:
                     self._write_to_zarr(current_gauge)
-                    self.gauge_data = {"date": [], "y_sim": [], "y_obs": []}  # clear memory for the new gauge
+                    self.gauge_data = {k: [] for k in self.gauge_data}  # clear memory for the new gauge
 
                 # update current gauge
                 current_gauge = batch_gauge_id

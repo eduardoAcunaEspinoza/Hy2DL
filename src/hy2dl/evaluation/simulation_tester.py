@@ -22,6 +22,7 @@ class SimulationTester(BaseTester):
 
     def __init__(self, cfg: Config, evaluation_dataset: BaseDataset):
         super(SimulationTester, self).__init__(cfg=cfg, evaluation_dataset=evaluation_dataset)
+        self.gauge_data = {"date": [], "y_sim": [], "y_obs": []}
 
     def validate_model(self, model: torch.nn.Module, epoch: int, filter_mask: xr.DataArray = None):
         self._validate_model(model=model, epoch=epoch, forecast_mode=False, filter_mask=filter_mask)

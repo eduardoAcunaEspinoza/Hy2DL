@@ -548,10 +548,9 @@ class BaseDataset(Dataset):
         # Finalize dataset setup
         # --------------------------
         self._finalize_setup()
-        
+
         self.cfg.logger.info(
-            f"Time required to process the dataset: "
-            f"{datetime.timedelta(seconds=int(time.time() - processing_time))}"
+            f"Time required to process the dataset: {datetime.timedelta(seconds=int(time.time() - processing_time))}"
         )
 
     def _add_lagged_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -748,7 +747,7 @@ class BaseDataset(Dataset):
 
         """
         self.cfg.logger.info(f"Creating {self.period} dataset in memory...")
-        
+
         # Get metadata (dates and features) from a sample to pre-allocate memory
         dates = pd.date_range(start=self.warmup_start_date, end=self.end_date, freq=self.data_freq)
         features = self.variables_of_interest
@@ -1089,6 +1088,9 @@ class BaseDataset(Dataset):
         # -------------------------
         # Valid indices hindcast (always mapped to ds_ts)
         # -------------------------
+        # Check all dates in valid_samples are contained in ds_ts. Important to avoid errors when mapping indexexs
+        if not np.isin(self.valid_samples["date"], self.ds_ts["date"].values).all():
+            raise ValueError("Some dates in valid_samples are missing from ds_ts.")
         self.valid_idx_hc["date_idx"] = np.searchsorted(self.ds_ts["date"].values, self.valid_samples["date"])
         id_to_idx = dict(zip(self.ds_ts["gauge_id"].values, range(self.ds_ts["gauge_id"].size), strict=True))
         self.valid_idx_hc["gauge_idx"] = [id_to_idx[sample_id] for sample_id in self.valid_samples["gauge_id"]]
@@ -1099,7 +1101,6 @@ class BaseDataset(Dataset):
         for source in np.unique(self.valid_samples["source"]):
             # Extract the valid dates and gauge_ids for current source
             source_mask = self.valid_samples["source"] == source
-            source_ids = np.where(source_mask)[0]
             valid_date = self.valid_samples["date"][source_mask]
             valid_gauge = self.valid_samples["gauge_id"][source_mask]
 
@@ -1115,9 +1116,11 @@ class BaseDataset(Dataset):
             else:
                 raise ValueError(f"Invalid source: {source}. Expected 'obs' or 'fc'.")
 
-            self.valid_idx_fc["date_idx"][source_ids] = np.searchsorted(target_date, valid_date)
+            if not np.isin(valid_date, target_date).all():
+                raise ValueError(f"Some dates in valid_samples are missing from {source} dataset.")
+            self.valid_idx_fc["date_idx"][source_mask] = np.searchsorted(target_date, valid_date)
             id_to_idx = dict(zip(target_gauge, range(len(target_gauge)), strict=True))
-            self.valid_idx_fc["gauge_idx"][source_ids] = [id_to_idx[sample_id] for sample_id in valid_gauge]
+            self.valid_idx_fc["gauge_idx"][source_mask] = [id_to_idx[sample_id] for sample_id in valid_gauge]
 
             # Map features
             self.feature_to_idx[source] = dict(zip(target_feature, range(len(target_feature)), strict=True))
@@ -1437,11 +1440,18 @@ class BaseDataset(Dataset):
         # # Early exit if we don't want to check NaNs.
         # -------------------------
         if not check_nan:
-            if not self.pseudo_forecast_input and not self.cfg.forecast_input:
+            if not self.pseudo_forecast_input and not self.forecast_input:
                 return is_valid.expand_dims(source=["obs"]).transpose(..., "source")
-            elif self.pseudo_forecast_input and not self.cfg.forecast_input:
+            elif self.pseudo_forecast_input and not self.forecast_input:
                 return is_valid.expand_dims(source=["obs"]).transpose(..., "source")
-            elif not self.pseudo_forecast_input and self.cfg.forecast_input:
+            elif not self.pseudo_forecast_input and self.forecast_input:
+                # Even if we are not checking for NaNs, we can only consider as valid the samples the dates that have
+                # forecast information.
+                mask = xr.DataArray(
+                    True, coords={"gauge_id": self.ds_fc.gauge_id, "date": self.ds_fc.date}, dims=["gauge_id", "date"]
+                )
+                mask = mask.reindex(date=is_valid.date, fill_value=False)
+                is_valid = is_valid & mask
                 return is_valid.expand_dims(source=["fc"]).transpose(..., "source")
             else:
                 raise ValueError(

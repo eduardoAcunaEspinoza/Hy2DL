@@ -1,9 +1,9 @@
 # import necessary packages
+from collections import defaultdict
 from typing import Optional
 
 import pandas as pd
 
-from collections import defaultdict
 from hy2dl.datasetzoo import BaseDataset
 from hy2dl.utils.config import Config
 
@@ -76,14 +76,14 @@ class CARAVAN(BaseDataset):
         df_attributes = pd.concat(dfs, axis=0)
 
         # if possible, try to convert object columns to real numbers
-        for col in df_attributes.select_dtypes(include=['object']).columns:
-            df_attributes[col] = pd.to_numeric(df_attributes[col], errors='coerce')
-            
+        for col in df_attributes.select_dtypes(include=["object"]).columns:
+            df_attributes[col] = pd.to_numeric(df_attributes[col], errors="coerce")
+
         # encoding loop
-        categorical_cols = df_attributes.select_dtypes(exclude=['number']).columns
+        categorical_cols = df_attributes.select_dtypes(exclude=["number"]).columns
         for column in categorical_cols:
             df_attributes[column], _ = pd.factorize(df_attributes[column], sort=True)
-        
+
         # Filter attributes and basins of interest
         df_attributes = df_attributes.loc[self.gauge_id, self.cfg.static_input]
 
@@ -111,5 +111,7 @@ class CARAVAN(BaseDataset):
         # Get the subdataset name from the basin string.
         subdataset_name = basin.split("_")[0].lower()
         filepath = data_dir / "timeseries" / "csv" / subdataset_name / f"{basin}.csv"
-        df = pd.read_csv(filepath, index_col="date", parse_dates=["date"], dtype= defaultdict(lambda: "float32", date=str))
+        df = pd.read_csv(
+            filepath, index_col="date", parse_dates=["date"], dtype=defaultdict(lambda: "float32", date=str)
+        )
         return df

@@ -22,6 +22,7 @@ class ForecastTester(BaseTester):
 
     def __init__(self, cfg: Config, evaluation_dataset: BaseDataset):
         super(ForecastTester, self).__init__(cfg=cfg, evaluation_dataset=evaluation_dataset)
+        self.gauge_data = {"init_time_fc": [], "y_sim": [], "date": [], "y_obs": []}
 
         if self.cfg.seq_length_forecast != self.cfg.predict_last_n:
             raise ValueError(
@@ -81,25 +82,28 @@ class ForecastTester(BaseTester):
         ds_template.to_zarr(self.path_zarr, compute=False, mode="w", consolidated=False)
 
     def _extract_y_obs(self, sample):
-        return (sample["persistent_q"] * self.target_std + self.target_mean).squeeze(1)
+        return sample["y_obs"] * self.target_std + self.target_mean
 
     def _extract_y_sim(self, pred):
         return pred["y_hat"] * self.target_std + self.target_mean
 
     def _process_results(self, sample, y_sim, y_obs):
         """ "Processes the evaluation results for a batch of samples and stores them in the gauge_data dictionary."""
-        self.gauge_data["date"].append(sample["init_time_fc"])
+        self.gauge_data["init_time_fc"].append(sample["init_time_fc"])
         self.gauge_data["y_sim"].append(y_sim.cpu().numpy())
-        self.gauge_data["y_obs"].append(y_obs.cpu().numpy())
+        self.gauge_data["date"].append(sample["date"].flatten())
+        self.gauge_data["y_obs"].append(y_obs.cpu().flatten(start_dim=0, end_dim=1).numpy())
 
     def _write_to_zarr(self, gauge_id):
         """Writes the results of a gauge to the zarr file."""
         idx = self.gauge_idx[gauge_id]
 
         # concatenate gauge data
+        init_time_fc = np.concatenate(self.gauge_data["init_time_fc"], axis=0)
+        y_sim = np.concatenate(self.gauge_data["y_sim"], axis=0)
+
         dates = np.concatenate(self.gauge_data["date"], axis=0)
         y_obs = np.concatenate(self.gauge_data["y_obs"], axis=0)
-        y_sim = np.concatenate(self.gauge_data["y_sim"], axis=0)
 
         # avoid issues with missing dates by creating a full timeline and filling in the available data
         y_sim_filled = np.full(
@@ -107,10 +111,15 @@ class ForecastTester(BaseTester):
         )
         y_obs_filled = np.full((len(self.date_range), len(self.cfg.target)), np.nan, dtype="float32")
 
-        init_date_indices = self.date_range.get_indexer(dates)
-        valid_ = init_date_indices >= 0
-        y_sim_filled[init_date_indices[valid_], :, :] = y_sim[valid_]
-        y_obs_filled[init_date_indices[valid_], :] = y_obs[valid_]
+        # Map simulation values to their date-index
+        date_indices = self.date_range.get_indexer(init_time_fc)
+        valid_ = date_indices >= 0
+        y_sim_filled[date_indices[valid_], :, :] = y_sim[valid_]
+
+        # Map observed values to their date-index. Overlapping forecast windows will overwrite themselves
+        date_indices = self.date_range.get_indexer(dates)
+        valid_ = date_indices >= 0
+        y_obs_filled[date_indices[valid_], :] = y_obs[valid_]
 
         # write to zarr
         zarr_file = zarr.open(self.path_zarr, mode="r+")

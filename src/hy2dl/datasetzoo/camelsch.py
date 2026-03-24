@@ -1,9 +1,9 @@
 # import necessary packages
+from collections import defaultdict
 from typing import Optional
 
 import pandas as pd
 
-from collections import defaultdict
 from hy2dl.datasetzoo import BaseDataset
 from hy2dl.utils.config import Config
 
@@ -68,11 +68,11 @@ class CAMELS_CH(BaseDataset):
         df_attributes = pd.concat(dfs, axis=1)
 
         # if possible, try to convert object columns to real numbers
-        for col in df_attributes.select_dtypes(include=['object']).columns:
-            df_attributes[col] = pd.to_numeric(df_attributes[col], errors='coerce')
-            
+        for col in df_attributes.select_dtypes(include=["object"]).columns:
+            df_attributes[col] = pd.to_numeric(df_attributes[col], errors="coerce")
+
         # encoding loop
-        categorical_cols = df_attributes.select_dtypes(exclude=['number']).columns
+        categorical_cols = df_attributes.select_dtypes(exclude=["number"]).columns
         for column in categorical_cols:
             df_attributes[column], _ = pd.factorize(df_attributes[column], sort=True)
 
@@ -99,5 +99,7 @@ class CAMELS_CH(BaseDataset):
             self.cfg.path_data / "timeseries" / "observation_based" / f"CAMELS_CH_obs_based_{gauge_id}.csv"
         )
         # load time series
-        df = pd.read_csv(path_timeseries, index_col="date", parse_dates=["date"], dtype= defaultdict(lambda: "float32", date=str))
+        df = pd.read_csv(
+            path_timeseries, index_col="date", parse_dates=["date"], dtype=defaultdict(lambda: "float32", date=str)
+        )
         return df
