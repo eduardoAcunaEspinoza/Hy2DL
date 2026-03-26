@@ -1,5 +1,6 @@
 import datetime
 import time
+from typing import Any
 
 import torch
 from torch.utils.data import DataLoader
@@ -84,6 +85,10 @@ class BaseTrainer(object):
             sample = upload_to_device(sample, self.cfg.device)  # upload tensors to device
             self.optimizer.optimizer.zero_grad()  # sets gradients to zero
 
+            # Inject noise if noise_level is specified in the config
+            if self.cfg.noise_level is not None:
+                sample = self._inject_noise(sample=sample, noise_level=self.cfg.noise_level)
+
             # Forward pass of the model
             pred = self.model(sample)
 
@@ -103,3 +108,19 @@ class BaseTrainer(object):
         self.report = f"{epoch:^5}|{report_lr:^10.5f}|{running_loss:^10.3f}|{report_time:^10}|"
         self.optimizer.update_optimizer_lr(epoch=epoch + 1)
         torch.save(self.model.state_dict(), self.cfg.path_save_folder / "model" / f"model_epoch_{epoch}")
+
+    def _inject_noise(self, sample: dict[str, Any], noise_level: float) -> dict[str, Any]:
+        """Noise injection"""
+
+        # Apply noise to target variable
+        sample["y_obs"] = sample["y_obs"] * (1.0 + torch.randn_like(sample["y_obs"]) * noise_level)
+
+        # Apply noise to dynamic features
+        for key, value in sample.items():
+            if key.startswith("x_d"):
+                var_names = list(value.keys())
+                x_d_stacked = torch.stack(list(value.values()), dim=-1)
+                x_d_stacked = x_d_stacked * (1.0 + torch.randn_like(x_d_stacked) * noise_level)
+                sample[key] = dict(zip(var_names, x_d_stacked.unbind(dim=-1), strict=True))
+
+        return sample

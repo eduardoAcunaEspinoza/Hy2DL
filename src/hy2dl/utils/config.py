@@ -8,7 +8,6 @@ import numpy as np
 import torch
 import yaml
 
-from hy2dl.utils.distributions import Distribution
 from hy2dl.utils.logging import get_logger
 
 
@@ -244,8 +243,13 @@ class Config(object):
                 "`hybrid` model requires `conceptual_model` and `dynamic_input_conceptual_model` to be specified."
             )
         if self.model == "lstmmdn":
-            if self.distribution not in [dist.value for dist in Distribution]:
-                raise ValueError(f"`distribution`: {self.distribution} not supported.")
+            from hy2dl.utils import distribution_registry
+
+            if self.distribution not in distribution_registry:
+                raise ValueError(
+                    f"`distribution`: {self.distribution} not supported."
+                    f" available distributions: {distribution_registry.keys()}"
+                )
             if self.num_mixture_components is None:
                 raise ValueError("`lstmmdn` model requires `num_mixture_components` to be specified.")
 
@@ -568,6 +572,16 @@ class Config(object):
     @nan_probabilistic_masking.setter
     def nan_probabilistic_masking(self, value: bool) -> None:
         self._cfg["nan_probabilistic_masking"] = value
+
+    @property
+    def noise_level(self) -> Optional[float]:
+        return self._cfg.get("noise_level")
+
+    @noise_level.setter
+    def noise_level(self, value: float) -> None:
+        if value is not None and value < 0:
+            raise ValueError("noise_level must be non-negative.")
+        self._cfg["noise_level"] = value
 
     @property
     def num_mixture_components(self) -> int:

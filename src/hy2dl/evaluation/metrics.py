@@ -45,9 +45,9 @@ def _apply_forecast_metric(ds: xr.Dataset, metric_name: str, filter_mask: xr.Dat
 
     lead_times = ds["lead_time"].values
 
-    # Special case for persistence-based metrics
-    use_persistence = metric_name.lower() == "pnse"
-    y_persistent = ds["y_obs"] if use_persistence else None
+    # Reindex filter_mask to match the dataset's date and gauge_id dimensions, filling missing values with False
+    if filter_mask is not None:
+        filter_mask = filter_mask.reindex(date=ds.date, gauge_id=ds.gauge_id, fill_value=False)
 
     results = []
     for lt in lead_times:
@@ -56,19 +56,32 @@ def _apply_forecast_metric(ds: xr.Dataset, metric_name: str, filter_mask: xr.Dat
 
         # Create valid mask
         valid_mask = y_sim.notnull() & y_obs.notnull()
-        if use_persistence:
-            valid_mask = valid_mask & y_persistent.notnull()
-        if filter_mask is not None:  # additional custom filter mask (e.g. to evaluate only on certain dates or gauges)
-            valid_mask = valid_mask & filter_mask
 
         # Apply masks and gather the necessary data for the metric function
+        if metric_name.lower() == "pnse":
+            if lt > 0:  # Forecast baseline: locked at emission time
+                last_available_q = ds["y_obs"]
+            else:  # Hindcast baseline: steps back with the target
+                last_available_q = ds["y_obs"].shift(date=-int(lt - 1))
+
+            valid_mask = valid_mask & last_available_q.notnull()
+
+        if filter_mask is not None:  # additional custom filter mask (e.g. to evaluate only on certain dates or gauges)
+            mask_shifted = filter_mask.shift(date=-int(lt))
+            valid_mask = valid_mask & mask_shifted
+
         kwargs = {"obs": y_obs.where(valid_mask), "sim": y_sim.where(valid_mask)}
-        if use_persistence:
-            kwargs["persistent"] = y_persistent.where(valid_mask)
+        if metric_name.lower() == "pnse":
+            kwargs["persistent"] = last_available_q.where(valid_mask)
+
+        # If applicable, inject other variables (e.g, probabilistic variables: mdn_weight, mu, sigma, etc.)
+        for var in ds.data_vars:
+            if var not in ["y_obs", "y_sim"]:
+                var_sliced = ds[var].sel(lead_time=lt)
+                kwargs[var] = var_sliced.where(valid_mask)
 
         # Apply metric
         metric_val = metric_func(**kwargs)
-
         results.append(metric_val)
 
     # Concatenate back into a single DataArray
@@ -83,6 +96,10 @@ def _apply_simulation_metric(ds: xr.Dataset, metric_name: str, filter_mask: xr.D
     if metric_func is None:
         raise ValueError(f"Unknown metric: {metric_name}. Available metrics: {list(simulation_metric_registry.keys())}")
 
+    # Reindex filter_mask to match the dataset's date and gauge_id dimensions, filling missing values with False
+    if filter_mask is not None:
+        filter_mask = filter_mask.reindex(date=ds.date, gauge_id=ds.gauge_id, fill_value=False)
+
     y_sim = ds["y_sim"]
     y_obs = ds["y_obs"]
 
@@ -92,6 +109,11 @@ def _apply_simulation_metric(ds: xr.Dataset, metric_name: str, filter_mask: xr.D
         valid_mask = valid_mask & filter_mask
 
     kwargs = {"obs": y_obs.where(valid_mask), "sim": y_sim.where(valid_mask)}
+    # If applicable, inject other variables (e.g, probabilistic variables: mdn_weight, mu, sigma, etc.)
+    for var in ds.data_vars:
+        if var not in ["y_obs", "y_sim"]:
+            kwargs[var] = ds[var].where(valid_mask)
+
     metric_val = metric_func(**kwargs)
 
     return metric_val
@@ -101,6 +123,7 @@ def calculate_metrics(
     ds_results: xr.Dataset | Path,
     metrics: str | list[str] = "all",
     forecast_mode: bool = False,
+    distribution=None,
     filter_mask: xr.DataArray = None,
     collapse: bool = False,
 ) -> xr.DataArray:

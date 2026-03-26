@@ -43,7 +43,7 @@ class LSTMMDN(nn.Module):
         self.distribution = get_distribution(cfg)
 
         self.fc_params = nn.Linear(
-            cfg.hidden_size, self.distribution.num_params * cfg.num_mixture_components * cfg.output_features
+            cfg.hidden_size, len(self.distribution.parameters) * cfg.num_mixture_components * cfg.output_features
         )
         self.fc_weights = nn.Sequential(
             nn.Linear(cfg.hidden_size, cfg.num_mixture_components * cfg.output_features),
@@ -85,6 +85,7 @@ class LSTMMDN(nn.Module):
         -------
         dict
             Dictionary containing:
+            - 'y_hat': expected value of the mixture distribution, shape [B, N, T]
             - 'params': dict of distribution parameters [B, N, K, T]
             - 'weights': mixture weights of shape [B, N, K, T]
 
@@ -94,5 +95,7 @@ class LSTMMDN(nn.Module):
         # Probabilistic head layer
         params = self.distribution.map_parameters(raw_params=self.fc_params(out["hs"]))
         weights = self.fc_weights(out["hs"])
+        # expected value of the distribution -> deterministic prediction
+        y_hat = self.distribution.mean(params=params)
 
-        return {"params": params, "weights": weights}
+        return {"y_hat": y_hat, "params": params, "weights": weights}

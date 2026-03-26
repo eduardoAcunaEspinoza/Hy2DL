@@ -38,11 +38,7 @@ class BaseTester(object):
         # Extract gauges and dates from evaluation dataset
         self.unique_gauges = np.unique(evaluation_dataset.valid_samples["gauge_id"])
         self.gauge_idx = dict(zip(self.unique_gauges, range(len(self.unique_gauges)), strict=True))
-        self.date_range = pd.date_range(
-            start=evaluation_dataset.valid_samples["date"].min(),
-            end=evaluation_dataset.valid_samples["date"].max(),
-            freq=evaluation_dataset.data_freq,
-        )
+        self.date_range = self._create_date_range(evaluation_dataset)
 
         # We use a custom sampler that construct the batches by sampling elements of the same gauge_id.
         evaluation_sampler = GaugeBatchSampler(
@@ -58,21 +54,18 @@ class BaseTester(object):
         )
 
         # Calculate target mean and std to de-normalize the results
-        self.target_mean = (
-            torch.from_numpy(
+        self.target_scaler = {
+            "mean": torch.from_numpy(
                 evaluation_dataset.scaler["data"].sel(statistic="mean", feature=evaluation_dataset.cfg.target).values
             )
             .float()
-            .to(self.cfg.device)
-        )
-
-        self.target_std = (
-            torch.from_numpy(
+            .to(self.cfg.device),
+            "std": torch.from_numpy(
                 evaluation_dataset.scaler["data"].sel(statistic="std", feature=evaluation_dataset.cfg.target).values
             )
             .float()
-            .to(self.cfg.device)
-        )
+            .to(self.cfg.device),
+        }
         self.path_zarr = self.cfg.path_save_folder / f"{evaluation_dataset.period}_results.zarr"
         self.validation_report = ""
 
@@ -111,19 +104,58 @@ class BaseTester(object):
 
                 # run model
                 pred = model(sample)
-                # extract variables of interest
-                y_sim = self._extract_y_sim(pred)
-                y_obs = self._extract_y_obs(sample)
                 # process results from current batch
-                self._process_results(sample, y_sim, y_obs)
+                self._process_results(sample, pred)
                 # free memory
-                del sample, pred, y_sim, y_obs
+                del sample, pred
 
             # Write last gauge to disk
             if current_gauge is not None:
                 self._write_to_zarr(current_gauge)
 
         zarr.consolidate_metadata(self.path_zarr)  # consolidate metadata to optimize read performance
+
+    def _create_date_range(self, evaluation_dataset):
+        """Creates a date range that encompasses all possible observation dates in the evaluation dataset.
+
+        Parameters
+        ----------
+        evaluation_dataset : BaseDataset
+            The dataset used for evaluation, which contains the valid samples with their corresponding dates.
+
+        Returns
+        -------
+        pd.DatetimeIndex
+            A date range that covers all possible observation dates in the evaluation dataset, taking into account the
+            emission dates and the forecast length.
+
+        """
+        freq = evaluation_dataset.data_freq
+
+        # Get the min and max emission dates (init_time_fc)
+        min_init = pd.Timestamp(evaluation_dataset.valid_samples["date"].min())
+        max_init = pd.Timestamp(evaluation_dataset.valid_samples["date"].max())
+
+        # Calculate offsets based on your predict_last_n and forecast logic
+        # Max obs date is the last emission + the full forecast length
+        max_obs_date = max_init + pd.to_timedelta(self.cfg.seq_length_forecast, unit=freq)
+        # Min obs date might step backwards if predict_last_n > seq_length_forecast
+        min_obs_date = min_init + pd.to_timedelta(self.cfg.seq_length_forecast - self.cfg.predict_last_n + 1, unit=freq)
+
+        # Full range must encompass all emissions AND all observations
+        return pd.date_range(start=min(min_init, min_obs_date), end=max(max_init, max_obs_date), freq=freq)
+
+    def _initialize_zarr(self):
+        raise NotImplementedError
+
+    def _extract_y_obs(self, sample):
+        return sample["y_obs"] * self.target_scaler["std"] + self.target_scaler["mean"]
+
+    def _extract_y_sim(self, pred):
+        return pred["y_hat"] * self.target_scaler["std"] + self.target_scaler["mean"]
+
+    def _process_results(self, sample, y_sim, y_obs):
+        raise NotImplementedError
 
     def _validate_model(
         self, model: torch.nn.Module, epoch: int, forecast_mode: bool, filter_mask: xr.DataArray = None
@@ -157,18 +189,6 @@ class BaseTester(object):
             )
         else:
             self.validation_report = f"{'':^10}|{'':^10}|"
-
-    def _initialize_zarr(self):
-        raise NotImplementedError
-
-    def _extract_y_obs(self, sample):
-        raise NotImplementedError
-
-    def _extract_y_sim(self, pred):
-        raise NotImplementedError
-
-    def _process_results(self, sample, y_sim, y_obs):
-        raise NotImplementedError
 
     def _write_to_zarr(self, gauge_id):
         raise NotImplementedError

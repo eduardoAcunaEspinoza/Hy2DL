@@ -1,8 +1,15 @@
-import hy2dl.training.loss as loss
+import hy2dl.training.loss as loss_module
 from hy2dl.utils.config import Config
 
+# Define the registry mapping
+loss_registry = {
+    "nll": loss_module.NLL,
+    "nse_basin_averaged": loss_module.NSEBasinAveraged,
+    "weighted_mse": loss_module.WeightedMSE,
+}
 
-def get_loss(cfg: Config) -> loss.BaseLoss:
+
+def get_loss(cfg: Config) -> loss_module.BaseLoss:
     """Get loss object, depending on the run configuration.
 
     Parameters
@@ -12,17 +19,15 @@ def get_loss(cfg: Config) -> loss.BaseLoss:
 
     Returns
     -------
-    loss.BaseLoss
+    loss_module.BaseLoss
         A new loss instance of the type specified in the config.
     """
+    loss_name = cfg.loss.lower()
 
-    if cfg.loss.lower() == "nse_basin_averaged":
-        loss = loss.NSEBasinAveraged(cfg=cfg)
-    elif cfg.loss.lower() == "weighted_mse":
-        loss = loss.WeightedMSE(cfg=cfg)
-    elif cfg.loss.lower() == "feng2022":
-        loss = loss.Feng2022(cfg=cfg)
-    else:
-        raise NotImplementedError(f"{cfg.loss} not implemented or not linked in `get_loss()`")
+    if loss_name not in loss_registry:
+        available = list(loss_registry.keys())
+        raise NotImplementedError(f"'{loss_name}' not implemented. Available losses: {available}")
 
-    return loss
+    # Instantiate the mapped class and return it
+    loss_class = loss_registry[loss_name]
+    return loss_class(cfg=cfg)

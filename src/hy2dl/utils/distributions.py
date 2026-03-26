@@ -28,6 +28,29 @@ class BaseDistribution(nn.Module):
         super().__init__()
         self.cfg = cfg
 
+    def backtransform_parameters(
+        self, params: dict[str, torch.Tensor], target_scaler: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        """Back-transform parameters from the standardized space to the original space.
+
+        Parameters
+        ----------
+        params: dict[str, torch.Tensor]
+            Dictionary containing the parameters of the mixture distribution, in the standardized space, with shape
+            [B, N, K, T] for each parameter
+        target_scaler: dict[str, torch.Tensor]
+            Dictionary containing the mean and standard deviation of the target variables, with shape [T] for each
+            variable.
+
+        Returns
+        -------
+        dict[str, torch.Tensor]
+            Dictionary containing the parameters of the mixture distribution, in the original space, with shape
+            [B, N, K, T] for each parameter
+
+        """
+        raise NotImplementedError
+
     def calc_cdf(self, params: dict[str, torch.Tensor], weights: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """Calculate the cumulative distribution function (CDF) of the mixture distribution at the given value `x`.
 
@@ -237,12 +260,19 @@ class BaseDistribution(nn.Module):
         return samples
 
     @property
-    def num_params(self) -> int:
+    def parameters(self) -> tuple[str]:
         pass
 
 
 class GaussianMixture(BaseDistribution):
     """Gaussian mixture distribution."""
+
+    def backtransform_parameters(
+        self, params: dict[str, torch.Tensor], target_scaler: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        mean_data = target_scaler["mean"].view(1, 1, 1, -1)  # [1, 1, 1, T]
+        std_data = target_scaler["std"].view(1, 1, 1, -1)  # [1, 1, 1, T]
+        return {"loc": params["loc"] * std_data + mean_data, "scale": params["scale"] * std_data}
 
     def calc_cdf(self, params: dict[str, torch.Tensor], weights: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         x = x.unsqueeze(-2)  # [B, N, 1, T]
@@ -287,12 +317,23 @@ class GaussianMixture(BaseDistribution):
         return samples
 
     @property
-    def num_params(self) -> int:
-        return 2
+    def parameters(self) -> tuple[str]:
+        return ("loc", "scale")
 
 
 class AsymmetricLaplaceMixture(BaseDistribution):
     """Asymmetric Laplace mixture distribution."""
+
+    def backtransform_parameters(
+        self, params: dict[str, torch.Tensor], target_scaler: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        mean_data = target_scaler["mean"].view(1, 1, 1, -1)  # [1, 1, 1, T]
+        std_data = target_scaler["std"].view(1, 1, 1, -1)  # [1, 1, 1, T]
+        return {
+            "loc": params["loc"] * std_data + mean_data,
+            "scale": params["scale"] * std_data,
+            "kappa": params["kappa"],
+        }
 
     def calc_cdf(self, params: dict[str, torch.Tensor], weights: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         x = x.unsqueeze(-2)  # [B, N, 1, T]
@@ -354,5 +395,5 @@ class AsymmetricLaplaceMixture(BaseDistribution):
         return samples
 
     @property
-    def num_params(self) -> int:
-        return 3
+    def parameters(self) -> tuple[str]:
+        return ("loc", "scale", "kappa")

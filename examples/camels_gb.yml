@@ -1,5 +1,5 @@
 experiment_name: LSTM_CAMELS_GB
-path_data: ../data/CAMELS_GB
+path_data: D:/Hy2DL/data/CAMELS_GB
 path_entities_training: ../data/basin_id/basins_camels_gb_669.txt
 path_entities_validation: ../data/basin_id/basins_camels_gb_518.txt
 path_entities_testing: ../data/basin_id/basins_camels_gb_518.txt
@@ -52,7 +52,7 @@ learning_rate:
   10: 0.0005
   20: 0.0001
 validate_every: 1
-device: cuda:0
+device: cpu
 num_workers: 4
 random_seed: 1
 dataset: CAMELS_GB

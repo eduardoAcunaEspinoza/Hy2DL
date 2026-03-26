@@ -5,6 +5,12 @@ from hy2dl.modelzoo.cudalstm import CudaLSTM
 from hy2dl.modelzoo.lstmmdn import LSTMMDN
 from hy2dl.utils.config import Config
 
+# Define the registry mapping
+model_registry = {
+    "cudalstm": CudaLSTM,
+    "lstmmdn": LSTMMDN,
+}
+
 
 def get_model(cfg: Config) -> nn.Module:
     """Get model object, depending on the run configuration.
@@ -19,12 +25,12 @@ def get_model(cfg: Config) -> nn.Module:
     nn.Module
         A new model instance of the type specified in the config.
     """
+    model_name = cfg.model.lower()
 
-    if cfg.model.lower() == "cudalstm":
-        model = CudaLSTM(cfg=cfg)
-    elif cfg.model.lower() == "lstmmdn":
-        model = LSTMMDN(cfg=cfg)
-    else:
-        raise NotImplementedError(f"{cfg.model} not implemented or not linked in `get_model()`")
+    if model_name not in model_registry:
+        available = list(model_registry.keys())
+        raise NotImplementedError(f"'{model_name}' not implemented. Available models: {available}")
 
-    return model
+    # Instantiate the mapped class and return it
+    model_class = model_registry[model_name]
+    return model_class(cfg=cfg)
