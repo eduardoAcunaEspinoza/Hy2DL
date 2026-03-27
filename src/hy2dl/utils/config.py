@@ -194,47 +194,32 @@ class Config(object):
             raise ValueError("Running models in forecast mode requires `seq_length_forecast > 0`")
 
     def _check_metrics(self):
-        """Check that the specified metrics are supported."""
+        """Check for specific configurations required by certain metrics."""
+        from hy2dl.evaluation.registry import registry
 
-        from hy2dl.evaluation.metrics import forecast_metric_registry, simulation_metric_registry
+        is_forecast = False if self.forecast_signals == [] else True
+        is_probabilistic = self.distribution is not None
+        requested_metrics = registry.get_available(forecast_mode=is_forecast, probabilistic=is_probabilistic)
 
-        if not isinstance(self.validation_metric, str):
-            raise ValueError(
-                "validation_metric must be a single string. Multiple metrics for validation are not supported."
-            )
+        # Check validation metrics
+        for m_name in self.validation_metric:
+            if m_name.lower() == "all":
+                raise ValueError("Validation metric cannot be 'all'. Please specify the desired metrics explicitly.")
 
-        is_simulation_mode = len(self.pseudo_forecast_input) == 0 and len(self.forecast_input) == 0
-        if is_simulation_mode:
-            active_registry = simulation_metric_registry
-            mode_name = "simulation"
-        else:
-            active_registry = forecast_metric_registry
-            mode_name = "forecast"
-
-        valid_keys = list(active_registry.keys())
-
-        # validation_metric
-        if self.validation_metric.lower() not in valid_keys:
-            raise ValueError(
-                f"Unknown validation_metric for {mode_name} mode: '{self.validation_metric}'. "
-                f"Available metrics: {valid_keys}"
-            )
-
-        # testing_metrics
-        if isinstance(self.testing_metrics, str):
-            if self.testing_metrics.lower() != "all" and self.testing_metrics.lower() not in valid_keys:
+            elif m_name.lower() not in requested_metrics:
                 raise ValueError(
-                    f"Unknown testing_metrics: '{self.testing_metrics}'. Available metrics: {valid_keys} or 'all'"
+                    f"Metric '{m_name}' is not compatible with the current configuration."
+                    f"Available metrics for this configuration are: {requested_metrics}"
                 )
-        elif isinstance(self.testing_metrics, list):
-            for metric in self.testing_metrics:
-                if metric.lower() not in valid_keys:
-                    raise ValueError(
-                        f"Unknown testing metric in {mode_name} mode: '{metric}'. "
-                        f"Available metrics: {valid_keys} or 'all'"
-                    )
-        else:
-            raise TypeError("testing_metrics must be a string or a list of strings.")
+
+        # Check testing metrics
+        for m_name in self.testing_metrics:
+            available_metrics = requested_metrics + ["all"]
+            if m_name.lower() not in available_metrics:
+                raise ValueError(
+                    f"Metric '{m_name}' is not compatible with the current configuration. "
+                    f"Available metrics for this configuration are: {available_metrics}"
+                )
 
     def _check_models(self):
         """Check for specific configurations required by certain models."""
@@ -774,8 +759,8 @@ class Config(object):
         return self._cfg.get("teacher_forcing_scheduler")
 
     @property
-    def testing_metrics(self) -> str | list[str]:
-        return self._cfg.get("testing_metrics", "all")
+    def testing_metrics(self) -> list[str]:
+        return Config._as_default_list(self._cfg.get("testing_metrics", "all"))
 
     @property
     def testing_period(self) -> list[str]:
@@ -798,8 +783,8 @@ class Config(object):
         return self._cfg.get("validate_every", 1)
 
     @property
-    def validation_metric(self) -> str:
-        return self._cfg.get("validation_metric", "nse")
+    def validation_metric(self) -> list[str]:
+        return Config._as_default_list(self._cfg.get("validation_metric", "nse"))
 
     @property
     def validation_period(self) -> list[str]:

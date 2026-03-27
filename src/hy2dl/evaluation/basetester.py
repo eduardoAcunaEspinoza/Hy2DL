@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from hy2dl.datasetzoo import BaseDataset
-from hy2dl.evaluation.metrics import calculate_metrics
+from hy2dl.evaluation.evaluator import calculate_metrics
 from hy2dl.utils.config import Config
 from hy2dl.utils.sampler import GaugeBatchSampler
 from hy2dl.utils.utils import upload_to_device
@@ -115,6 +115,51 @@ class BaseTester(object):
 
         zarr.consolidate_metadata(self.path_zarr)  # consolidate metadata to optimize read performance
 
+    def validate_model(
+        self,
+        model: torch.nn.Module,
+        epoch: int,
+        filter_mask: xr.DataArray = None,
+    ):
+        """Validate the model every cfg.validate_every epochs and calculate the validation metric.
+
+        Parameters
+        ----------
+        model : torch.nn.Module
+            Model to evaluate.
+        epoch : int
+            Current epoch number.
+        forecast_mode : bool
+            True if the dataset is from a forecast model (with lead_time dimension), False if from a simulation model.
+        filter_mask : xr.DataArray, optional
+            Boolean DataArray to filter values during evaluation. Expected dimensions (gauge_id, date).
+
+        """
+        if epoch % self.cfg.validate_every == 0:
+            validation_time = time.time()
+            # Model evaluation and results storage
+            self.evaluate_model(model=model)
+            # Calculate validation metrics
+            validation_loss = calculate_metrics(
+                ds_results=self.path_zarr,
+                metric_name=self.cfg.validation_metric,
+                forecast_mode=False if self.cfg.forecast_signals == [] else True,
+                distribution=self.cfg.distribution,
+                filter_mask=filter_mask,
+            )
+            validation_results = validation_loss.median(dim=[d for d in validation_loss.dims if d != "metric"])
+            validation_results = validation_results.to_series().to_dict()
+
+            metrics_str = "".join([f"{validation_results[m]:^10.3f}|" for m in self.cfg.validation_metric])
+            time_str = f"{str(datetime.timedelta(seconds=int(time.time() - validation_time))):^10}|"
+
+            self.validation_report = metrics_str + time_str
+        else:
+            # Generate the correct number of empty columns for skipped epochs
+            empty_metrics = "".join([f"{'':^10}|" for _ in range(len(self.cfg.validation_metric))])
+            empty_time = f"{'':^10}|"
+            self.validation_report = empty_metrics + empty_time
+
     def _create_date_range(self, evaluation_dataset):
         """Creates a date range that encompasses all possible observation dates in the evaluation dataset.
 
@@ -156,39 +201,6 @@ class BaseTester(object):
 
     def _process_results(self, sample, y_sim, y_obs):
         raise NotImplementedError
-
-    def _validate_model(
-        self, model: torch.nn.Module, epoch: int, forecast_mode: bool, filter_mask: xr.DataArray = None
-    ):
-        """Validate the model every cfg.validate_every epochs and calculate the validation metric.
-
-        Parameters
-        ----------
-        model : torch.nn.Module
-            Model to evaluate.
-        epoch : int
-            Current epoch number.
-        forecast_mode : bool
-            True if the dataset is from a forecast model (with lead_time dimension), False if from a simulation model.
-        filter_mask : xr.DataArray, optional
-            Boolean DataArray to filter values during evaluation. Expected dimensions (gauge_id, date).
-
-        """
-        if epoch % self.cfg.validate_every == 0:
-            validation_time = time.time()
-            self.evaluate_model(model=model)
-            validation_loss = calculate_metrics(
-                ds_results=self.path_zarr,
-                metrics=self.cfg.validation_metric,
-                forecast_mode=forecast_mode,
-                filter_mask=filter_mask,
-                collapse=True,
-            )
-            self.validation_report = (
-                f"{validation_loss:^10.3f}|{str(datetime.timedelta(seconds=int(time.time() - validation_time))):^10}|"
-            )
-        else:
-            self.validation_report = f"{'':^10}|{'':^10}|"
 
     def _write_to_zarr(self, gauge_id):
         raise NotImplementedError

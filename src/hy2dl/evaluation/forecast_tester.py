@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 import xarray as xr
 import zarr
 
@@ -23,9 +22,6 @@ class ForecastTester(BaseTester):
     def __init__(self, cfg: Config, evaluation_dataset: BaseDataset):
         super(ForecastTester, self).__init__(cfg=cfg, evaluation_dataset=evaluation_dataset)
         self.gauge_data = {"date": [], "y_obs": [], "y_sim": [], "init_time_fc": []}
-
-    def validate_model(self, model: torch.nn.Module, epoch: int, filter_mask: xr.DataArray = None):
-        self._validate_model(model=model, epoch=epoch, forecast_mode=True, filter_mask=filter_mask)
 
     def _initialize_zarr(self):
         """Creates the zarr structure to store the data.

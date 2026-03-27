@@ -8,7 +8,7 @@ distribution_registry = {
 }
 
 
-def get_distribution(cfg: Config) -> distribution_module.BaseDistribution:
+def get_distribution(distribution: str) -> distribution_module.BaseDistribution:
     """Get distribution object, depending on the run configuration.
 
     Parameters
@@ -22,7 +22,7 @@ def get_distribution(cfg: Config) -> distribution_module.BaseDistribution:
         A new distribution instance of the type specified in the config.
 
     """
-    dist_name = cfg.distribution.lower()
+    dist_name = distribution.lower()
 
     if dist_name not in distribution_registry:
         available = list(distribution_registry.keys())
@@ -30,4 +30,4 @@ def get_distribution(cfg: Config) -> distribution_module.BaseDistribution:
 
     # Instantiate the mapped class and return it
     dist_class = distribution_registry[dist_name]
-    return dist_class(cfg=cfg)
+    return dist_class()

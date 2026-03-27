@@ -1,9 +1,12 @@
 from hy2dl.evaluation.basetester import BaseTester
+from hy2dl.evaluation.evaluator import calculate_metrics
 from hy2dl.evaluation.forecast_tester import ForecastTester
 from hy2dl.evaluation.forecast_tester_mdn import ForecastTesterMDN
 from hy2dl.evaluation.simulation_tester import SimulationTester
 from hy2dl.evaluation.simulation_tester_mdn import SimulationTesterMDN
 from hy2dl.utils.config import Config
+
+__all__ = ["calculate_metrics", "get_tester"]
 
 
 def get_tester(cfg: Config) -> BaseTester:

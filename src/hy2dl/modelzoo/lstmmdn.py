@@ -40,8 +40,10 @@ class LSTMMDN(nn.Module):
         self.cudaLSTM = CudaLSTM(cfg)
 
         # Mix-density network head
-        self.distribution = get_distribution(cfg)
+        self.distribution = get_distribution(distribution=cfg.distribution)
 
+        self.num_mixture_components = cfg.num_mixture_components
+        self.output_features = cfg.output_features
         self.fc_params = nn.Linear(
             cfg.hidden_size, len(self.distribution.parameters) * cfg.num_mixture_components * cfg.output_features
         )
@@ -93,9 +95,13 @@ class LSTMMDN(nn.Module):
         out = self.cudaLSTM(sample)
 
         # Probabilistic head layer
-        params = self.distribution.map_parameters(raw_params=self.fc_params(out["hs"]))
+        params = self.distribution.map_parameters(
+            raw_params=self.fc_params(out["hs"]),
+            num_mixture_components=self.num_mixture_components,
+            num_targets=self.output_features,
+        )
         weights = self.fc_weights(out["hs"])
         # expected value of the distribution -> deterministic prediction
-        y_hat = self.distribution.mean(params=params)
+        y_hat = self.distribution.mean(params=params, weights=weights)
 
         return {"y_hat": y_hat, "params": params, "weights": weights}

@@ -44,7 +44,7 @@ class CudaLSTM(nn.Module):
         self.dropout = torch.nn.Dropout(p=cfg.dropout_rate)
 
         # Add linear head if the LSTM layer is used as a standalone model.
-        if cfg.model == "cudalstm":
+        if cfg.model.lower() == "cudalstm":
             self.cudalstm = True
             self.linear = nn.Linear(in_features=cfg.hidden_size, out_features=cfg.output_features)
         else:

@@ -4,8 +4,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from hy2dl.utils.config import Config
-
 PI = torch.tensor(math.pi)
 
 
@@ -24,9 +22,8 @@ class BaseDistribution(nn.Module):
 
     """
 
-    def __init__(self, cfg: Config):
+    def __init__(self):
         super().__init__()
-        self.cfg = cfg
 
     def backtransform_parameters(
         self, params: dict[str, torch.Tensor], target_scaler: dict[str, torch.Tensor]
@@ -91,13 +88,19 @@ class BaseDistribution(nn.Module):
         """
         raise NotImplementedError
 
-    def map_parameters(self, raw_params: torch.Tensor) -> dict[str, torch.Tensor]:
+    def map_parameters(
+        self, raw_params: dict[str, torch.Tensor], num_mixture_components: int, num_targets: int
+    ) -> dict[str, torch.Tensor]:
         """Map LSTM output to the distribution parameters
 
         Parameters
         ----------
         raw_params: torch.Tensor
             Raw parameters output by the model, with shape [B, N, K * T] for each parameter.
+        num_mixture_components: int
+            Number of mixture components (K).
+        num_targets: int
+            Number of target variables (T).
 
         Returns
         -------
@@ -107,13 +110,15 @@ class BaseDistribution(nn.Module):
         """
         raise NotImplementedError
 
-    def mean(self, params: dict[str, torch.Tensor]) -> torch.Tensor:
+    def mean(self, params: dict[str, torch.Tensor], weights: torch.Tensor) -> torch.Tensor:
         """Calculate the mean of the mixture distribution given its parameters.
 
         Parameters
         ----------
         params: dict[str, torch.Tensor]
             Dictionary containing the parameters of the mixture distribution, with shape [B, N, K, T] for each parameter
+        weights: torch.Tensor
+            Mixture weights, with shape [B, N, K, T].
 
         Returns
         -------
@@ -206,7 +211,9 @@ class BaseDistribution(nn.Module):
         """
         raise NotImplementedError
 
-    def _reshape_params(self, params: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def _reshape_params(
+        self, params: dict[str, torch.Tensor], num_mixture_components: int, num_targets: int
+    ) -> dict[str, torch.Tensor]:
         """Reshape parameters from [B, N, K * T] to [B, N, K, T]
 
         Parameters
@@ -214,6 +221,10 @@ class BaseDistribution(nn.Module):
         params: dict[str, torch.Tensor]
             Dictionary containing the parameters of the mixture distribution, with shape [B, N, K * T] for each
             parameter
+        num_mixture_components: int
+            Number of mixture components (K)
+        num_targets: int
+            Number of target variables (T)
 
         Returns
         -------
@@ -221,10 +232,7 @@ class BaseDistribution(nn.Module):
             Dictionary containing the reshaped parameters of the mixture distribution, with shape [B, N, K, T] for each
             parameter
         """
-        return {
-            k: v.reshape(v.shape[0], v.shape[1], self.cfg.num_mixture_components, self.cfg.output_features)
-            for k, v in params.items()
-        }
+        return {k: v.reshape(v.shape[0], v.shape[1], num_mixture_components, num_targets) for k, v in params.items()}
 
     def _sample_from_mixture(self, samples: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         """Helper function to sample from a mixture distribution.
@@ -289,17 +297,24 @@ class GaussianMixture(BaseDistribution):
         p = (x - loc) / scale
         log_p = -0.5 * p.pow(2) - torch.log(scale) - 0.5 * torch.log(2 * PI)
         log_w = torch.log(torch.clamp(weights, min=1e-10))
-        log_p = torch.logsumexp(log_p + log_w, dim=2)  # [B, N, T]
+        log_p = torch.logsumexp(log_p + log_w, dim=-2)  # [B, N, T]
         return log_p
 
-    def map_parameters(self, raw_params: torch.Tensor) -> dict[str, torch.Tensor]:
+    def map_parameters(
+        self, raw_params: torch.Tensor, num_mixture_components: int, num_targets: int
+    ) -> dict[str, torch.Tensor]:
         loc, scale = raw_params.chunk(2, dim=-1)
         params = {"loc": loc, "scale": F.softplus(scale)}
-        return self._reshape_params(params)
+        params = self._reshape_params(
+            params=params, num_mixture_components=num_mixture_components, num_targets=num_targets
+        )
+        return params
 
-    def mean(self, params: dict[str, torch.Tensor]) -> torch.Tensor:
+    def mean(self, params: dict[str, torch.Tensor], weights: torch.Tensor) -> torch.Tensor:
         # Reference: https://en.wikipedia.org/wiki/Normal_distribution
-        return params["loc"]
+        mean = params["loc"]
+        mean = (mean * weights).sum(dim=-2)  # [B, N, T]
+        return mean
 
     def sample(self, params: dict[str, torch.Tensor], weights: torch.Tensor, num_samples: int) -> torch.Tensor:
         loc, scale = params["loc"], params["scale"]
@@ -358,17 +373,24 @@ class AsymmetricLaplaceMixture(BaseDistribution):
         log_p[~mask] = p[~mask] / kappa[~mask]
         log_p = log_p - torch.log(kappa + 1 / kappa) - torch.log(scale)
         log_w = torch.log(torch.clamp(weights, min=1e-10))
-        log_p = torch.logsumexp(log_p + log_w, dim=2)  # [B, N, T]
+        log_p = torch.logsumexp(log_p + log_w, dim=-2)  # [B, N, T]
         return log_p
 
-    def map_parameters(self, raw_params: torch.Tensor) -> dict[str, torch.Tensor]:
+    def map_parameters(
+        self, raw_params: torch.Tensor, num_mixture_components: int, num_targets: int
+    ) -> dict[str, torch.Tensor]:
         loc, scale, kappa = raw_params.chunk(3, dim=-1)
         params = {"loc": loc, "scale": F.softplus(scale), "kappa": F.softplus(kappa)}
-        return self._reshape_params(params)
+        params = self._reshape_params(
+            params=params, num_mixture_components=num_mixture_components, num_targets=num_targets
+        )
+        return params
 
-    def mean(self, params: dict[str, torch.Tensor]) -> torch.Tensor:
+    def mean(self, params: dict[str, torch.Tensor], weights: torch.Tensor) -> torch.Tensor:
         # Reference: https://en.wikipedia.org/wiki/Asymmetric_Laplace_distribution
-        return params["loc"] + params["scale"] * (1 - params["kappa"].pow(2)) / params["kappa"]
+        mean = params["loc"] + params["scale"] * (1 - params["kappa"].pow(2)) / params["kappa"]
+        mean = (mean * weights).sum(dim=-2)  # [B, N, T]
+        return mean
 
     def sample(self, params: dict[str, torch.Tensor], weights: torch.Tensor, num_samples: int) -> torch.Tensor:
         # Reference: https://en.wikipedia.org/wiki/Asymmetric_Laplace_distribution

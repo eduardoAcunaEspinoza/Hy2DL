@@ -27,7 +27,7 @@ class NLL(BaseLoss):
 
     def __init__(self, cfg: Config):
         super().__init__(cfg)
-        self.distribution = get_distribution(cfg)
+        self.distribution = get_distribution(distribution=cfg.distribution)
 
         if cfg.target_weights is not None:
             self.target_weights = torch.tensor(cfg.target_weights, dtype=torch.float32, device=cfg.device)
@@ -35,8 +35,21 @@ class NLL(BaseLoss):
             self.target_weights = torch.ones(len(cfg.target), dtype=torch.float32, device=cfg.device)
 
     def forward(self, pred: dict[str, torch.Tensor], sample: dict[str, Any]) -> torch.Tensor:
-        log_p = self.distribution.calc_logpdf(params=pred["params"], weights=pred["weights"], x=sample["y_obs"])
-        nll = -log_p.mean(dim=(0, 1))
+        y_obs = sample["y_obs"]
+
+        # mask to avoid NaN in y_obs affecting the loss calculation; these values will be ignored later
+        mask = ~torch.isnan(y_obs)
+        y_obs = torch.nan_to_num(y_obs, nan=0.0)
+
+        log_p = self.distribution.calc_logpdf(params=pred["params"], weights=pred["weights"], x=y_obs)
+
+        # Calculate the mean NLL across the batch and sequence dimensions. To properly handle NaNs, we calculate the
+        # mean as sum(valid)/n_valid
+        log_p = log_p * mask
+        sum_log_p = log_p.sum(dim=(0, 1))
+        n_valid = mask.sum(dim=(0, 1)).clamp(min=1)
+        nll = -(sum_log_p / n_valid)
+
         return torch.dot(nll, self.target_weights)
 
 
