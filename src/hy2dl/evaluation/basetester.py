@@ -79,6 +79,7 @@ class BaseTester(object):
         """
         model.eval()
         self._initialize_zarr()
+        self.gauge_data = {k: [] for k in self.gauge_data}
         current_gauge = None
 
         with torch.no_grad():

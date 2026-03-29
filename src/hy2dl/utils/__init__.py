@@ -1,5 +1,4 @@
 import hy2dl.utils.distributions as distribution_module
-from hy2dl.utils.config import Config
 
 # Define the registry mapping
 distribution_registry = {
