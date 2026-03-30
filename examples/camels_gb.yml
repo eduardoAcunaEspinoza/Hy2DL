@@ -1,8 +1,8 @@
 experiment_name: LSTM_CAMELS_GB
 path_data: D:/Hy2DL/data/CAMELS_GB
-path_entities_training: ../data/basin_id/basins_camels_gb_5.txt
-path_entities_validation: ../data/basin_id/basins_camels_gb_5.txt
-path_entities_testing: ../data/basin_id/basins_camels_gb_5.txt
+path_entities_training: ../data/basin_id/basins_camels_gb_669.txt
+path_entities_validation: ../data/basin_id/basins_camels_gb_518.txt
+path_entities_testing: ../data/basin_id/basins_camels_gb_518.txt
 dynamic_input:
 - precipitation
 - peti
@@ -45,7 +45,7 @@ seq_length: 365
 hidden_size: 64
 batch_size_training: 256
 batch_size_evaluation: 1024
-epochs: 1
+epochs: 20
 dropout_rate: 0.4
 learning_rate:
   1: 0.001

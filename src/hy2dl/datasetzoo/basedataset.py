@@ -553,7 +553,6 @@ class BaseDataset(Dataset):
         # Finalize dataset setup
         # --------------------------
         self._finalize_setup()
-
         self.cfg.logger.info(
             f"Time required to process the dataset: {datetime.timedelta(seconds=int(time.time() - processing_time))}"
         )
