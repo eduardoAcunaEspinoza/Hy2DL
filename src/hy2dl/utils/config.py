@@ -213,8 +213,8 @@ class Config(object):
                 )
 
         # Check testing metrics
+        available_metrics = requested_metrics + ["all"]
         for m_name in self.testing_metrics:
-            available_metrics = requested_metrics + ["all"]
             if m_name.lower() not in available_metrics:
                 raise ValueError(
                     f"Metric '{m_name}' is not compatible with the current configuration. "
@@ -671,6 +671,30 @@ class Config(object):
 
         return (folder / suffix).resolve()
 
+    @property
+    def path_valid_samples_testing(self) -> Optional[Path]:
+        return self._prepare_path("path_valid_samples_testing")
+
+    @path_valid_samples_testing.setter
+    def path_valid_samples_testing(self, value: str):
+        self._cfg["path_valid_samples_testing"] = value
+    
+    @property
+    def path_valid_samples_training(self) -> Optional[Path]:
+        return self._prepare_path("path_valid_samples_training")
+
+    @path_valid_samples_training.setter
+    def path_valid_samples_training(self, value: str):
+        self._cfg["path_valid_samples_training"] = value
+    
+    @property
+    def path_valid_samples_validation(self) -> Optional[Path]:
+        return self._prepare_path("path_valid_samples_validation")
+
+    @path_valid_samples_validation.setter
+    def path_valid_samples_validation(self, value: str):
+        self._cfg["path_valid_samples_validation"] = value  
+    
     @property
     def predict_last_n(self) -> int:
         return self._cfg.get("predict_last_n", 1)

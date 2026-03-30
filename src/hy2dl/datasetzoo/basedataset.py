@@ -452,12 +452,7 @@ class BaseDataset(Dataset):
 
         return sample
 
-    def setup_dataset(
-        self,
-        check_nan=True,
-        path_scaler: Optional[Path | str] = None,
-        path_validate_samples: Optional[Path | str] = None,
-    ):
+    def setup_dataset(self, check_nan=True, path_scaler: Optional[Path | str] = None):
         """Get data ready for training or evaluation.
 
         This is the function you should call to load and process the dataset, and get it ready for use. It process,
@@ -477,42 +472,49 @@ class BaseDataset(Dataset):
         3. Calculate statistics: Calculate data statistics that are used for standardization.
         4. Finalize: runs `_finalize_setup()` to optimize memory and data access speed.
 
+        Note: Even if `cfg.dataset_in_ram = True`, disk-based datasets are kept lazy for sample validation, mapping,
+        and scaler calculation. If `cfg.dataset_in_ram = True` and enough RAM is available, the datasets will be moved
+        to RAM in `_finalize_setup()`.
+
         Parameters
         ----------
         check_nan : bool, default=True
             Check for nan values during validate_samples-
         path_scaler : Path or str, optional
             Path to saved `scaler.yml` file.
-        path_validate_samples : Path or str, optional
-            Path to a saved CSV file that lists all the valid samples.
 
         """
         processing_time = time.time()
         # Check if path to existing dataset was specified in config
-        _load_existing_dataset = getattr(self.cfg, f"path_dataset_{self.period}") is not None
+        _path_dataset = getattr(self.cfg, f"path_dataset_{self.period}", None)
         # Check if we are in training mode
-        _is_training = self.period == "training"
-        if not _is_training and not path_scaler:
+        if not (self.period == "training") and not path_scaler:
             raise ValueError(
                 "When dataset for validation or testing is being created, argument `path_scaler` should be provided"
             )
         # --------------------------
         # Create or load dataset of observed data
         # --------------------------
-        # Create dataset in RAM
-        if not _load_existing_dataset and self.cfg.dataset_in_ram:
-            self._create_dataset()
-            self.dataset_in_ram = True
-        else:
-            # Create zarr dataset in disk and load it lazily
-            if not _load_existing_dataset:
-                self._create_zarr_dataset()
-                self._load_dataset(path_dataset=self.path_dataset)
-            else:  # Load existing zarr dataset lazily
-                self._load_dataset()
-            self.dataset_in_ram = False
+        # If the user specified a path to an existing dataset, we load it.
+        if _path_dataset is not None and _path_dataset.exists():
+            self.path_dataset = _path_dataset
+            self._load_dataset()
 
+        else:  # We need to create the dataset
+            if self.cfg.dataset_in_ram:  # create the dataset directly in RAM
+                self._create_dataset(save_path=_path_dataset if _path_dataset is not None else None)
+                self.dataset_in_ram = True
+
+            else:  # Create it in disk as zarr file, without loading it into RAM.
+                self.path_dataset = (
+                    _path_dataset if _path_dataset is not None else self.cfg.path_data / f"dataset_{self.period}.zarr"
+                )
+                self._create_zarr_dataset()
+                self._load_dataset()
+
+        # --------------------------
         # static attributes
+        # --------------------------
         self._process_attributes()
 
         # --------------------------
@@ -525,18 +527,21 @@ class BaseDataset(Dataset):
         # --------------------------
         # Validate samples
         # --------------------------
-        if path_validate_samples is not None:
-            self._load_valid_samples(path_scaler=self.path_scaler)
-        else:
+        _path_valid_samples = getattr(self.cfg, f"path_valid_samples_{self.period}", None)
+        if _path_valid_samples is None:  # validate without saving them
             self._validate_samples(check_nan=check_nan)
+        elif _path_valid_samples is not None and not _path_valid_samples.is_file():  # validate and save
+            self._validate_samples(check_nan=check_nan, save_path=_path_valid_samples)
+        else:  # load valid samples from existing file
+            self._load_valid_samples(path_valid_samples=_path_valid_samples)
 
         # --------------------------
         # Scalers
         # --------------------------
-        if path_scaler is not None:
-            self._load_scaler(path_scaler=path_scaler)
-        else:
+        if path_scaler is None:  # calculate scaler and save it
             self._calculate_scaler()
+        else:  # load scaler from existing file
+            self._load_scaler(path_scaler=path_scaler)
 
         # --------------------------
         # Additional variables
@@ -729,7 +734,7 @@ class BaseDataset(Dataset):
             )
             return False
 
-    def _create_dataset(self):
+    def _create_dataset(self, save_path: Path = None):
         """Creates the dataset and keeps it in memory.
 
         The function reads and process the data, for each entity (e.g., catchment), and store the results as an
@@ -744,6 +749,11 @@ class BaseDataset(Dataset):
 
         Note: Because this function builds the entire dataset in RAM, you must have enough memory to hold the processed
         data.
+
+        Parameters
+        ----------
+        save_path: Path, optional
+            If provided, the dataset will be saved to this path in zarr format.
 
         """
         self.cfg.logger.info(f"Creating {self.period} dataset in memory...")
@@ -783,6 +793,10 @@ class BaseDataset(Dataset):
         self.ds_ts = self.ds_ts.chunk({"gauge_id": 1, "date": -1, "feature": -1})  # chunking helps speed up operations.
         self.cfg.logger.info("Dataset created successfully.")
 
+        if save_path is not None:
+            self.ds_ts.to_zarr(save_path, mode="w", consolidated=True)
+            self.cfg.logger.info(f"Dataset saved at: {save_path}")
+
     def _create_zarr_dataset(self):
         """Creates the dataset and writes it directly to a zarr file on disk.
 
@@ -802,7 +816,6 @@ class BaseDataset(Dataset):
         """
         self.cfg.logger.info("Creating zarr dataset...")
         # Initialize zarr structure to store the processed results
-        self.path_dataset = self.cfg.path_data / f"dataset_{self.period}.zarr"
         self._initialize_zarr()
 
         # Create array of entities' index (used later to write the data in the right position in the zarr)
@@ -840,7 +853,7 @@ class BaseDataset(Dataset):
         """
         # If we still do not have the dataset in RAM is because we did a lazy loading of an existing dataset. If the
         # user requested to load the dataset in RAM, we check if we have enough RAM to do it and if so, we load it.
-        # Otherwise, we remove the reference, to re-open it directly in the workers using tensorstore.
+        # Otherwise, we remove the reference, to re-open it directly in pytorch´s workers using tensorstore.
         if not self.dataset_in_ram:
             if self.cfg.dataset_in_ram and self._check_ram(required_ram=self.ds_ts.nbytes):
                 self.ds_ts = self.ds_ts.compute()
@@ -909,7 +922,7 @@ class BaseDataset(Dataset):
         # processed data).
         ds_template.to_zarr(self.path_dataset, compute=False, mode="w", consolidated=False)
 
-    def _load_dataset(self, path_dataset: Optional[Path] = None, engine: str = "xarray"):
+    def _load_dataset(self, engine: str = "xarray"):
         """Loads an existing zarr dataset from disk.
 
         This function opens a zarr dataset and filters it to include only the gauges, time periods, and variables of
@@ -926,18 +939,10 @@ class BaseDataset(Dataset):
 
         Parameters
         ----------
-        path_dataset: Optional[Path]
-            If provided, the function will load the dataset from the specified path instead of the default path in the
-            configuration.
         engine: str, default="xarray"
             The engine to use for loading the zarr dataset.
 
         """
-        if path_dataset is not None:
-            self.path_dataset = path_dataset
-        else:
-            self.path_dataset = self.cfg.path_data / f"dataset_{self.period}.zarr"
-
         if engine == "tensorstore":  # used for batch construction
             ds = xarray_tensorstore.open_zarr(self.path_dataset)
         elif engine == "xarray":  # used for data processing and validation
@@ -1056,6 +1061,7 @@ class BaseDataset(Dataset):
             Path to the csv file containing the valid samples
 
         """
+        self.cfg.logger.info("Loading valid samples from file...")
         self.valid_samples = np.loadtxt(
             path_valid_samples,
             delimiter=",",
@@ -1066,6 +1072,7 @@ class BaseDataset(Dataset):
 
         # Sort valid samples by gauge_id and date
         self.valid_samples = np.sort(self.valid_samples, order=["gauge_id", "date"])
+        self.valid_gauges = np.unique(self.valid_samples["gauge_id"])
 
         # Map valid samples to their corresponding indexes in the zarr structure for faster access in getitem
         self._map_indexes()
@@ -1234,7 +1241,7 @@ class BaseDataset(Dataset):
             ) / self.scaler_attributes.sel(statistic="std")
             self.cfg.logger.info("Static attributes were successfully standardized.")
 
-    def _validate_samples(self, check_nan: bool = True):
+    def _validate_samples(self, check_nan: bool = True, save_path: Path = None):
         """Function to construct the valid samples table.
 
         Parameters
@@ -1242,6 +1249,8 @@ class BaseDataset(Dataset):
         check_nan : Optional[bool], default=True
             Whether to check for NaN values while processing the data. This should typically be True during training,
             and can be set to False during evaluation (validation/testing).
+        save_path: Optional[Path], default=None
+            If provided, the valid samples will be saved as a csv file in this path.
 
         """
         self.cfg.logger.info("Validating samples...")
@@ -1289,6 +1298,10 @@ class BaseDataset(Dataset):
 
         # Map valid samples to their corresponding indexes in the zarr structure for faster access in getitem
         self._map_indexes()
+
+        if save_path is not None:  # Save valid samples to csv if the user requested it
+            pd.DataFrame(self.valid_samples).to_csv(save_path, index=False)
+            self.cfg.logger.info(f"Valid samples saved at: {save_path}")
 
     def _valid_samples_mask(self, check_nan: bool = True) -> xr.DataArray:
         """Logic to check for valid samples.

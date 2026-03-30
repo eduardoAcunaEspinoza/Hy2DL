@@ -139,7 +139,7 @@ def _apply_simulation_metric(
 
 def calculate_metrics(
     ds_results: xr.Dataset | Path,
-    metric_name: str | list[str] = "all",
+    metric_name: list[str] = ["all"],
     forecast_mode: bool = False,
     distribution=None,
     filter_mask: xr.DataArray = None,
@@ -151,8 +151,8 @@ def calculate_metrics(
     ----------
     ds_results : xr.Dataset | Path
         Dataset loaded from the evaluation Zarr.
-    metric_name : str | list[str]
-        List of metric names to calculate, or "all" to run all valid metrics.
+    metric_name : list[str]
+        List of metric names to calculate, or ["all"] to run all valid metrics.
     forecast_mode : bool
         True if the dataset is from a forecast model (with lead_time dimension).
     distribution : str, optional
@@ -170,15 +170,13 @@ def calculate_metrics(
         ds_results = xr.open_zarr(ds_results)
 
     is_probabilistic = distribution is not None
-    if isinstance(metric_name, str):
-        if metric_name.lower() == "all":
-            # The registry safely filters out probabilistic metrics if no distribution is provided, and filters out
-            # forecast metrics if forecast_mode is False.
+    if isinstance(metric_name, list):
+        if "all" in metric_name:
             requested_metrics = registry.get_available(forecast_mode=forecast_mode, probabilistic=is_probabilistic)
         else:
-            requested_metrics = [metric_name.lower()]
+            requested_metrics = [m.lower() for m in metric_name]
     else:
-        requested_metrics = [m.lower() for m in metric_name]
+        raise ValueError(f"metric_name must be a list of strings. Got {type(metric_name)}")
 
     # Safety Check: See that we have all the necessary inputs for the requested metrics
     for m_name in requested_metrics:
