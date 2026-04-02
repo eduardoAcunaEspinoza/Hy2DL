@@ -34,7 +34,9 @@ class InputLayer(nn.Module):
             self.dynamic_input = cfg.dynamic_input
             self._x_d_key = "x_d"
         elif embedding_type == "forecast":
-            self.dynamic_input = cfg.forecast_signals
+            self.dynamic_input = (
+                cfg.forecast_signals if cfg.pseudo_forecast_ar_input == [] else cfg.extended_forecast_signals
+            )
             self._x_d_key = "x_d_fc"
         else:
             raise ValueError("embedding_type must be either 'hindcast' or 'forecast'")
@@ -51,6 +53,12 @@ class InputLayer(nn.Module):
             self.static_input_size = len(cfg.static_input)
         else:
             self.static_input_size = cfg.static_embedding["hiddens"][-1]
+
+        # Get length of the input sequence
+        if not cfg.custom_seq_processing_flag:
+            self.input_seq_length = getattr(cfg, f"seq_length_{self.embedding_type}", None)
+        else:
+            self.input_seq_length = sum(v["n_steps"] for v in cfg.custom_seq_processing.values())
 
         # Get embedding networks
         self._get_embeddings(cfg)

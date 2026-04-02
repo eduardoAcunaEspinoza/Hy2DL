@@ -28,17 +28,28 @@ class CudaLSTM(nn.Module):
         super().__init__()
 
         # Embedding network hindcast period
-        self.embedding_hindcast = InputLayer(cfg)
+        self.emb_hc = InputLayer(cfg)
 
-        # Embedding network forecast period, if neccesary
+        # Configurations from forecast period, if neccesary
         self.forecast_mode = False
+        self.forecast_counter = 0
         if cfg.forecast_signals:
             self.forecast_mode = True
-            self.embedding_forecast = InputLayer(cfg, embedding_type="forecast")
+            self.emb_fc = InputLayer(cfg, embedding_type="forecast")
+
+            if cfg.forecast_counter:
+                self.forecast_counter = 1
+                fc_counter = torch.zeros(
+                    self.emb_hc.input_seq_length + self.emb_fc.input_seq_length, dtype=torch.float32
+                )
+                fc_counter[self.emb_hc.input_seq_length :] = torch.arange(
+                    1, self.emb_fc.input_seq_length + 1, dtype=torch.float32
+                )
+                self.register_buffer("fc_counter", fc_counter)
 
         # LSTM
         self.lstm = nn.LSTM(
-            input_size=self.embedding_hindcast.output_size, hidden_size=cfg.hidden_size, batch_first=True
+            input_size=self.emb_hc.output_size + self.forecast_counter, hidden_size=cfg.hidden_size, batch_first=True
         )
 
         self.dropout = torch.nn.Dropout(p=cfg.dropout_rate)
@@ -84,12 +95,16 @@ class CudaLSTM(nn.Module):
         - T: number of target variables
 
         """
-        # Preprocess data for hindcast period
-        x_lstm = self.embedding_hindcast(sample)
+        # Data for hindcast period
+        x_lstm = self.emb_hc(sample)
 
+        # Data for forecast period, if specified
         if self.forecast_mode:
-            x_fc = self.embedding_forecast(sample)
+            x_fc = self.emb_fc(sample)
             x_lstm = torch.cat((x_lstm, x_fc), dim=1)
+
+            if self.forecast_counter == 1:
+                x_lstm = torch.cat((x_lstm, self.fc_counter.view(1, -1, 1).expand(x_lstm.shape[0], -1, -1)), dim=2)
 
         # Forward pass through the LSTM
         hs, _ = self.lstm(x_lstm)

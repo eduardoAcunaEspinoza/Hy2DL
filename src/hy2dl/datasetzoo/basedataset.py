@@ -87,6 +87,7 @@ class BaseDataset(Dataset):
 
         # input for pseudo-forecast and/or forecast period
         self.pseudo_forecast_input = BaseDataset.unique_values(x=self.cfg.pseudo_forecast_input)
+        self.pseudo_forecast_ar_input = BaseDataset.unique_values(x=self.cfg.pseudo_forecast_ar_input)
         self.forecast_input = BaseDataset.unique_values(x=self.cfg.forecast_input)
 
         ### -----------------------------------------------
@@ -114,7 +115,13 @@ class BaseDataset(Dataset):
 
         # Collect all variables of interest in one list
         self.variables_of_interest = list(
-            dict.fromkeys(self.hindcast_input + self.pseudo_forecast_input + self.cfg.target + additional_flag)
+            dict.fromkeys(
+                self.hindcast_input
+                + self.pseudo_forecast_input
+                + self.pseudo_forecast_ar_input
+                + self.cfg.target
+                + additional_flag
+            )
         )
 
         # Initialized variables
@@ -434,6 +441,19 @@ class BaseDataset(Dataset):
                     )
                     sample["x_d_fc"].update(dict(zip(self.forecast_input, x_tensor.unbind(dim=2), strict=True)))
 
+            if self.pseudo_forecast_ar_input:  # Auto-regressive input (teacher-forcing) for pseudo-forecast period.
+                x_ar_fc = _extract_xd_sequence(
+                    var_list=self.pseudo_forecast_ar_input,
+                    id_idx=id_idx_hc,
+                    start_t_indices=date_idx_hc + 1,
+                    length=self.cfg.seq_length_forecast,
+                    as_dict=False,
+                )
+                x_ar_fc = self._add_noise_ar(x_ar_fc)
+
+                sample["x_d_fc"].update(dict(zip(self.pseudo_forecast_ar_input, x_ar_fc.unbind(dim=2), strict=True)))
+
+            # Additional forecast variables
             sample["source_fc"] = source
             sample["init_time_fc"] = date
             sample["persistent_q"] = _extract_xd_sequence(
@@ -518,7 +538,7 @@ class BaseDataset(Dataset):
         self._process_attributes()
 
         # --------------------------
-        # Load forecast dataset
+        # Forecast dataset
         # --------------------------
         if self.cfg.path_forecast_dataset is not None:
             self._load_forecast_dataset()
@@ -581,6 +601,15 @@ class BaseDataset(Dataset):
                 raise ValueError("The value of the 'lagged_features' arg must be either an int or a list of ints")
 
         return df
+
+    def _add_noise_ar(self, x: torch.Tensor) -> torch.Tensor:
+        """Add noise to ar_input in forecast period to avoid overfitting when using teacher forcing"""
+
+        # Sigmoid-like noise
+        steps = torch.arange(1, x.shape[1] + 1, dtype=x.dtype, device=x.device)
+        incremental_factor = (0.2 / (1 + torch.exp(-(steps - 6)))).view(1, -1, 1)
+        noise = torch.randn_like(x) * incremental_factor
+        return x + (x * noise)
 
     def _calculate_basin_std(self):
         """Calculate standard deviation of the target variables for each basin.
@@ -1449,7 +1478,7 @@ class BaseDataset(Dataset):
             is_valid = is_valid & ablation_mask
 
         # -------------------------
-        # # Early exit if we don't want to check NaNs.
+        # Early exit if we don't want to check NaNs.
         # -------------------------
         if not check_nan:
             if not self.pseudo_forecast_input and not self.forecast_input:

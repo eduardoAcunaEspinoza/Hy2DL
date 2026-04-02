@@ -49,7 +49,7 @@ class Hourly_CAMELS_DE(CAMELS_DE):
         # Read hourly data
         path_timeseries = self.cfg.path_data / "timeseries" / f"CAMELS_DE_1h_hydromet_timeseries_{gauge_id}.csv"
         # load time series
-        df_hourly = pd.read_csv(path_timeseries, index_col="time", parse_dates=["time"])
-        df_hourly.index.rename("date", inplace=True)
+        df = pd.read_csv(path_timeseries, index_col="time", parse_dates=["time"])
+        df.index.rename("date", inplace=True)
 
-        return df_hourly
+        return df

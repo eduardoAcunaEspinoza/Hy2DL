@@ -47,8 +47,8 @@ class Config(object):
         self._check_dynamic_inputs()
         self._check_seq_length()
         self._check_embeddings()
-        self._check_nan_settings()
         self._check_forecast()
+        self._check_nan_settings_hc()
         self._check_models()
         self._check_metrics()
         self._check_num_workers()
@@ -103,6 +103,7 @@ class Config(object):
         fi = self.forecast_input
         di = self.dynamic_input
         has_embedding = self.dynamic_embedding is not None
+        pfi_ar = self.pseudo_forecast_ar_input
 
         # 1. Embedding check
         if (isinstance(pfi, dict) or isinstance(fi, dict)) and not has_embedding:
@@ -110,6 +111,8 @@ class Config(object):
                 "`dynamic_embedding` must be specified when either "
                 "`pseudo_forecast_input` or `forecast_input` are dictionaries."
             )
+        if pfi_ar and not has_embedding:
+            raise ValueError("`dynamic_embedding` must be specified when `pseudo_forecast_ar_input` is used.")
 
         # 2. Both are dictionaries
         if isinstance(pfi, dict) and isinstance(fi, dict):
@@ -163,6 +166,12 @@ class Config(object):
                     "This is supported only if `dynamic_embedding` is specified."
                 )
 
+        # In case we are using groups, we need to make sure the groups have a nan_probability associated to them.
+        nan_check = False
+        if isinstance(self.nan_probability, dict):
+            nan_check = True
+            nan_groups = list(self.nan_probability.keys())
+
         # Join forecast signals into single variable. I also evaluate if the forecast signals should later be used on a
         # single embedding network or not. We use a single embedding if we only have one forecast type (e.g., only
         # pseudo-forecast) or if the two signals are identical.
@@ -175,12 +184,29 @@ class Config(object):
         elif isinstance(pfi, dict) and isinstance(fi, dict):
             self.forecast_signals = {**pfi, **fi}
             self.merge_forecast_signal = False
+            if nan_check and not set(self.forecast_signals).issubset(set(nan_groups)):
+                raise ValueError(
+                    "All groups contained in `forecast_input` and `pseudo_forecast_input` must be specified in"
+                    "the `nan_probability` dictionary"
+                )
         elif isinstance(pfi, dict) and isinstance(fi, list):
             self.forecast_signals = {**pfi, "forecast": fi}
             self.merge_forecast_signal = False
+            if nan_check and not set(self.forecast_signals).issubset(set(nan_groups)):
+                raise ValueError(
+                    "All groups contained in `forecast_input` and `pseudo_forecast_input` must be specified in"
+                    "the `nan_probability` dictionary. Because `forecast_input` is a list, it should be assigned the"
+                    "key `forecast` in the `nan_probability` dictionary."
+                )
         elif isinstance(fi, dict) and isinstance(pfi, list):
             self.forecast_signals = {**fi, "pseudo_forecast": pfi}
             self.merge_forecast_signal = False
+            if nan_check and not set(self.forecast_signals).issubset(set(nan_groups)):
+                raise ValueError(
+                    "All groups contained in `forecast_input` and `pseudo_forecast_input` must be specified in"
+                    "the `nan_probability` dictionary. Because `pseudo_forecast_input` is a list, it should be"
+                    " assigned the key `pseudo_forecast` in the `nan_probability` dictionary."
+                )
         elif isinstance(pfi, list) and isinstance(fi, list):
             if pfi == fi:
                 self.forecast_signals = pfi
@@ -188,10 +214,39 @@ class Config(object):
             else:
                 self.forecast_signals = {"pseudo_forecast": pfi, "forecast": fi}
                 self.merge_forecast_signal = False
+            if nan_check and not set(self.forecast_signals).issubset(set(nan_groups)):
+                raise ValueError(
+                    "All groups contained in `forecast_input` and `pseudo_forecast_input` must be specified in"
+                    "the `nan_probability` dictionary. Because `pseudo_forecast_input` and `forecast_input` are"
+                    " lists, they should be assigned the names `pseudo_forecast` and `forecast`, respectively, in the"
+                    "`nan_probability` dictionary."
+                )
 
         # Check forecast configuration
         if self.forecast_signals and self.seq_length_forecast == 0:
             raise ValueError("Running models in forecast mode requires `seq_length_forecast > 0`")
+
+        # If pseudo_forecast_ar_input is specified, we need to add it as a group in the forecast signals, as it will be
+        # processed by a different embedding. If forecast_signals is a list, we need to convert it to a dictionary.
+        if pfi_ar:
+            if isinstance(self.forecast_signals, list):
+                self.extended_forecast_signals = {"fc": self.forecast_signals, "ar": pfi_ar}
+                if nan_check and not set(self.extended_forecast_signals).issubset(set(nan_groups)):
+                    raise ValueError(
+                        "You are using `pseudo_forecast_ar_input`, together with `pseudo_forecast_input` and/or"
+                        "`forecast_input` as lists. Please specify the keys `fc` (for `pseudo_forecast_input` and/or"
+                        "`forecast_input`) and `ar` (for `pseudo_forecast_ar_input`) in the `nan_probability`"
+                        "dictionary."
+                    )
+            else:
+                self.extended_forecast_signals = {**self.forecast_signals, "ar": pfi_ar}
+                if nan_check and not set(self.extended_forecast_signals).issubset(set(nan_groups)):
+                    raise ValueError(
+                        "You are using `pseudo_forecast_ar_input`, together with `pseudo_forecast_input` and/or"
+                        "`forecast_input`. Please specify the key `ar` (for `pseudo_forecast_ar_input`) in the"
+                        "`nan_probability` dictionary. Moreover, all groups contained in `forecast_input` and/or"
+                        "`pseudo_forecast_input` must be specified "
+                    )
 
     def _check_metrics(self):
         """Check for specific configurations required by certain metrics."""
@@ -238,8 +293,8 @@ class Config(object):
             if self.num_mixture_components is None:
                 raise ValueError("`lstmmdn` model requires `num_mixture_components` to be specified.")
 
-    def _check_nan_settings(self):
-        """Check settings when working with nan handling methods"""
+    def _check_nan_settings_hc(self):
+        """Check hindcast settings when working with nan handling methods"""
         if self.nan_handling_method is not None:
             if self.nan_handling_method not in ["masked_mean", "input_replacement"]:
                 raise ValueError(
@@ -258,16 +313,9 @@ class Config(object):
                         if isinstance(v, dict):
                             input_groups.extend(k2 for k2 in v)
 
-                # Groups of forecast
-                if isinstance(self.pseudo_forecast_input, dict):
-                    input_groups.extend(k for k in self.pseudo_forecast_input)
-                if isinstance(self.forecast_input, dict):
-                    input_groups.extend(k for k in self.forecast_input)
-
                 if set(nan_groups) != set(input_groups):
                     raise ValueError(
-                        "All groups contained in `dynamic_input`, `pseudo_forecast_input`, and `forecast_input` "
-                        "must be specified in `nan_probability`"
+                        "All groups contained in `dynamic_input`, must be specified in the `nan_probability` dictionary"
                     )
 
     def _check_num_workers(self):
@@ -503,6 +551,10 @@ class Config(object):
         return Config._as_default_list(self._cfg.get("forcings"))
 
     @property
+    def forecast_counter(self) -> Optional[bool]:
+        return self._cfg.get("forecast_counter", False)
+
+    @property
     def forecast_dataset_in_ram(self) -> bool:
         return self._cfg.get("forecast_dataset_in_ram", True)
 
@@ -678,7 +730,7 @@ class Config(object):
     @path_valid_samples_testing.setter
     def path_valid_samples_testing(self, value: str):
         self._cfg["path_valid_samples_testing"] = value
-    
+
     @property
     def path_valid_samples_training(self) -> Optional[Path]:
         return self._prepare_path("path_valid_samples_training")
@@ -686,15 +738,15 @@ class Config(object):
     @path_valid_samples_training.setter
     def path_valid_samples_training(self, value: str):
         self._cfg["path_valid_samples_training"] = value
-    
+
     @property
     def path_valid_samples_validation(self) -> Optional[Path]:
         return self._prepare_path("path_valid_samples_validation")
 
     @path_valid_samples_validation.setter
     def path_valid_samples_validation(self, value: str):
-        self._cfg["path_valid_samples_validation"] = value  
-    
+        self._cfg["path_valid_samples_validation"] = value
+
     @property
     def predict_last_n(self) -> int:
         return self._cfg.get("predict_last_n", 1)
@@ -702,6 +754,10 @@ class Config(object):
     @predict_last_n.setter
     def predict_last_n(self, value: int):
         self._cfg["predict_last_n"] = value
+
+    @property
+    def pseudo_forecast_ar_input(self) -> list[str]:
+        return Config._as_default_list(self._cfg.get("pseudo_forecast_ar_input"))
 
     @property
     def pseudo_forecast_input(self) -> list[str] | dict[str, list[str]]:
