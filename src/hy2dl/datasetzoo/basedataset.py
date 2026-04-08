@@ -1132,8 +1132,9 @@ class BaseDataset(Dataset):
 
         # -------------------------
         # Valid indices forecat: Depending on the source (obs or forecast) the mapping is done to a different dataset.
+        # However even if the source is forecast, we still need to map to observed period for hindcast
         # -------------------------
-        for source in np.unique(self.valid_samples["source"]):
+        for source in np.unique(np.append(self.valid_samples["source"], "obs")):
             # Extract the valid dates and gauge_ids for current source
             source_mask = self.valid_samples["source"] == source
             valid_date = self.valid_samples["date"][source_mask]
@@ -1467,7 +1468,7 @@ class BaseDataset(Dataset):
         is_valid = is_valid & too_early
 
         # Too late (not enough future to form a pseudo-forecast sequence)
-        if self.pseudo_forecast_input:
+        if self.cfg.seq_length_forecast > 0:
             too_late_mask = is_valid.shift(date=-self.cfg.seq_length_forecast, fill_value=False)
             is_valid = is_valid & too_late_mask
 
