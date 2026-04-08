@@ -3,12 +3,14 @@ import torch.nn as nn
 # Deep learning methods
 from hy2dl.modelzoo.cudalstm import CudaLSTM
 from hy2dl.modelzoo.lstmmdn import LSTMMDN
+from hy2dl.modelzoo.maskedarlstm import MaskedARLSTM
 from hy2dl.utils.config import Config
 
 # Define the registry mapping
 model_registry = {
     "cudalstm": CudaLSTM,
     "lstmmdn": LSTMMDN,
+    "maskedarlstm": MaskedARLSTM,
 }
 
 

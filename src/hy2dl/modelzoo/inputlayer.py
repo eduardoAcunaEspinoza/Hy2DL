@@ -55,7 +55,7 @@ class InputLayer(nn.Module):
             self.static_input_size = cfg.static_embedding["hiddens"][-1]
 
         # Get length of the input sequence
-        if not cfg.custom_seq_processing_flag:
+        if self.embedding_type == "forecast" or not cfg.custom_seq_processing_flag:
             self.input_seq_length = getattr(cfg, f"seq_length_{self.embedding_type}", None)
         else:
             self.input_seq_length = sum(v["n_steps"] for v in cfg.custom_seq_processing.values())

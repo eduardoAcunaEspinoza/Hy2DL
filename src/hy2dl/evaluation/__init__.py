@@ -19,14 +19,14 @@ def get_tester(cfg: Config) -> BaseTester:
 
     """
     if cfg.forecast_signals == []:
-        if cfg.model.lower() == "cudalstm":
-            evaluator = SimulationTester
-        elif cfg.model.lower() == "lstmmdn":
+        if cfg.model.lower() == "lstmmdn":
             evaluator = SimulationTesterMDN
+        else:
+            evaluator = SimulationTester
     else:
-        if cfg.model.lower() == "cudalstm":
-            evaluator = ForecastTester
-        elif cfg.model.lower() == "lstmmdn":
+        if cfg.model.lower() == "lstmmdn":
             evaluator = ForecastTesterMDN
+        else:
+            evaluator = ForecastTester
 
     return evaluator

@@ -313,6 +313,12 @@ class Config(object):
                         if isinstance(v, dict):
                             input_groups.extend(k2 for k2 in v)
 
+                # Groups in forecast signals
+                if getattr(self, "forecast_signals", None) is not None and isinstance(self.forecast_signals, dict):
+                    input_groups.extend(k for k in self.forecast_signals)
+                if getattr(self, "extended_forecast_signals", None) is not None:
+                    input_groups.extend(k for k in self.extended_forecast_signals)
+
                 if set(nan_groups) != set(input_groups):
                     raise ValueError(
                         "All groups contained in `dynamic_input`, must be specified in the `nan_probability` dictionary"

@@ -148,10 +148,13 @@ class BaseTester(object):
                 distribution=self.cfg.distribution,
                 filter_mask=filter_mask,
             )
-            validation_results = validation_loss.median(dim=[d for d in validation_loss.dims if d != "metric"])
-            validation_results = validation_results.to_series().to_dict()
+            if "lead_time" in validation_loss.dims:  # If applicable, calculate mean over lead_time
+                validation_loss = validation_loss.mean(dim="lead_time")
+            # Calculate median over remaining dimensions
+            validation_loss = validation_loss.median(dim=[d for d in validation_loss.dims if d != "metric"])
+            validation_loss = validation_loss.to_series().to_dict()
 
-            metrics_str = "".join([f"{validation_results[m]:^10.3f}|" for m in self.cfg.validation_metric])
+            metrics_str = "".join([f"{validation_loss[m]:^10.3f}|" for m in self.cfg.validation_metric])
             time_str = f"{str(datetime.timedelta(seconds=int(time.time() - validation_time))):^10}|"
 
             self.validation_report = metrics_str + time_str

@@ -184,7 +184,7 @@ class BaseDistribution(nn.Module):
             # Newton step
             delta = (cdf - q) / (pdf + 1e-12)
             delta = torch.clamp(delta, min=-5.0, max=5.0)
-            
+
             x.sub_(delta)
 
             # Convergence check (stops when the maximum error across ALL quantiles/batches is below tol)
