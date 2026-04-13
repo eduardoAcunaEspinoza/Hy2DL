@@ -1,7 +1,7 @@
-Optimizer
+Evaluator
 ==========
 
-.. automodule:: hy2dl.utils.optimizer
+.. automodule:: hy2dl.evaluation.evaluator
    :members:
    :undoc-members:
    :show-inheritance:

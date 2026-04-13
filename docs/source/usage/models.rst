@@ -1,7 +1,7 @@
 Modelzoo
 ========
 
-The following section gives an overview of all implemented models. 
+The following section gives an overview of the implemented models and their possible variations. 
 
 
 Model Classes
@@ -9,52 +9,55 @@ Model Classes
 
 CudaLSTM
 ^^^^^^^^
-:py:class:`hy2dl.modelzoo.cudalstm.CudaLSTM` uses the standard PyTorch LSTM implementation. 
+:py:class:`hy2dl.modelzoo.cudalstm.CudaLSTM` uses the standard PyTorch LSTM implementation. By modifying the configurations, multiple model variations based on the CudaLSTM can be implemented.
 
-An example using this model can be found in the notebook folder, in the github repository.
+Standard case
+   The LSTM cell is used to analyze single-frequency data (e.g. daily data) in simulation mode. 
 
-Hybrid-Model
-^^^^^^^^^^^^
-:py:class:`hy2dl.modelzoo.hybridmodel.HybridModel` is a wrapper class to combine data-driven methods with
-conceptual hydrological models. Specifically, an LSTM network is used to produce a dynamic parameterization for a
-conceptual hydrological model. One can use multiple entities of the conceptual hydrological model acting in parallel.
+Multi-frequency
+   By modifying configuration arguments, multiple temporal resolutions (e.g. hourly and daily) can be processed. Depending on the amount of inputs per frequency, different embeddings can be used to map the inputs to a common shared dimension. Details of the configuration arguments related to this model can be found in :ref:`mf_reference` and :ref:`emb_reference`.
 
-Currently available conceptual hydrological models are:
+   .. figure:: ../_static/mf_lstm.png
+      :alt: Multi-frequency LSTM architecture
+      :align: center
 
--   :py:class:`hy2dl.modelzoo.shm.SHM`: `Acuna Espinoza et al (2024) <https://doi.org/10.5194/hess-28-2705-2024>`_
--   :py:class:`hy2dl.modelzoo.linear_reservoir.linear_reservoir`: `Acuna Espinoza et al (2024) <https://doi.org/10.5194/hess-28-2705-2024>`_
--   :py:class:`hy2dl.modelzoo.nonsense.NonSense`: `Acuna Espinoza et al (2024) <https://doi.org/10.5194/hess-28-2705-2024>`_
--   :py:class:`hy2dl.modelzoo.hbv.HBV`: `Feng et al (2022) <https://doi.org/10.1029/2022WR032404>`_ , `Acuna Espinoza et al (2025) <https://doi.org/10.5194/hess-29-1277-2025>`_
+      Multi-frequency LSTM architecture
 
+   Configuration files for multi-frequency approaches can be found in the examples folder in the GitHub repository. For further details of the architecture see: `Acuna Espinoza et al. (2025b) <https://doi.org/10.5194/hess-29-1749-2025>`_. 
 
-There is also the option to include an extra routing method (after the conceptual hydrological model), using a unit hydrograph based on gamma function
-:py:class:`hy2dl.modelzoo.uh_routing.UH_routing`. 
+Forecast LSTM
+   By modifying configuration arguments, the LSTM cell rolls out continuously through both the hindcast and forecast periods, using specific embedding layers for each case. Details of the configuration arguments related to this model can be found in :ref:`fc_reference` and :ref:`emb_reference`.
 
-For more information about hybrid models we refer to `Acuña Espinoza et al (2024) <https://doi.org/10.5194/hess-28-2705-2024>`__. An example using this model can be found in the notebook folder, 
-in the github repository.
+   .. figure:: ../_static/fc_lstm.png
+      :alt: Forecast LSTM architecture
+      :align: center
 
+      Forecast LSTM architecture
 
-MF-LSTM: Multi-frequency LSTM
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-By combining  :py:class:`hy2dl.modelzoo.cudalstm.CudaLSTM` and :py:class:`hy2dl.modelzoo.inputlayer.InputLayer`, one can use a single-cell
-lstm to process data at multiple temporal resolutions (e.g. hourly and daily). 
+   Configuration files for the forecast configuration can be found in the examples folder in the GitHub repository.
 
-For reference see: `Acuna Espinoza et al (2025b) <https://doi.org/10.5194/hess-29-1749-2025>`_
+Nan-handling LSTM
+   By modifying configuration arguments, the LSTM cell can handle groups of missing data. The implemented nan-handling strategies are based on `Gauch et al. (2025) <https://doi.org/10.5194/hess-29-6221-2025>`_. Details of the configuration arguments related to this model can be found in :ref:`nan_reference`.
 
-An example using this model can be found in the notebook folder, in the github repository.
+   .. figure:: ../_static/masked_mean.png
+      :alt: Masked mean nan-handling strategy
+      :align: center
 
+      Masked mean nan-handling strategy.
 
-Forecast-LSTM: Forecast LSTM
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-:py:class:`hy2dl.modelzoo.forecast_lstm.ForecastLSTM` a single LSTM cell rolls out through the hindcast and forecast period. Different embedding layers are used in each period
-to handle different amount of variables or varying types and quality of data. The model supports different temporal frequencies in the hindcast period.
+   Configuration files for nan-handling methods can be found in the examples folder in the GitHub repository.
 
-An example using this model can be found in the notebook folder, in the github repository.
+Further combinations...
+   Combining different approaches is also possible. For example, one can define a configuration to implement a Forecast LSTM with multi-frequency approaches in the hindcast period, plus nan-handling capabilities.
 
 LSTM-MDN: LSTM with Mixture Density Network output layer
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-:py:class:`hy2dl.modelzoo.lstmmdn.LSTM-MDN` combines an LSTM network with a Mixture Density Network (MDN) output layer. The MDN layer allows to model the output as a mixture of probability distributions, enabling probabilistic predictions.
+:py:class:`hy2dl.modelzoo.lstmmdn.LSTMMDN` combines an LSTM network with a Mixture Density Network (MDN) output layer. The MDN layer allows modeling the output as a mixture of probability distributions, enabling probabilistic predictions.
 
-For reference see: `Klotz et al (2022) <https://doi.org/10.5194/hess-26-1673-2022>`_
+.. figure:: ../_static/mdn_lstm.png
+   :alt: Mixture Density Network LSTM architecture
+   :align: center
 
-An example using this model can be found in the notebook folder, in the github repository.
+   Mixture Density Network LSTM architecture.
+
+Further details can be found in: `Klotz et al. (2022) <https://doi.org/10.5194/hess-26-1673-2022>`_. An example using this model can be found in the notebooks folder in the GitHub repository.

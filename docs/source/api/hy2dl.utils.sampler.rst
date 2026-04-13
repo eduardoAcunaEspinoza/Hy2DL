@@ -1,7 +1,7 @@
-HBV
-====
+Sampler
+========
 
-.. automodule:: hy2dl.modelzoo.hbv
+.. automodule:: hy2dl.utils.sampler
    :members:
    :undoc-members:
    :show-inheritance:

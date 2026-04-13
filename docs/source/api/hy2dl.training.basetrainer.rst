@@ -1,7 +1,7 @@
-UhRouting
+BaseTrainer
 ===========
 
-.. automodule:: hy2dl.modelzoo.uh_routing
+.. automodule:: hy2dl.training.basetrainer
    :members:
    :undoc-members:
    :show-inheritance:

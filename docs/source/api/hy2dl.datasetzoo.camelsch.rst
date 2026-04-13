@@ -1,7 +1,7 @@
-NonSense
+CamelsCH
 =========
 
-.. automodule:: hy2dl.modelzoo.nonsense
+.. automodule:: hy2dl.datasetzoo.camelsch
    :members:
    :undoc-members:
    :show-inheritance:

@@ -62,8 +62,8 @@ class NSEBasinAveraged(BaseLoss):
     References
     ----------
     .. [#] Kratzert, F., Klotz, D., Shalev, G., Klambauer, G., Hochreiter, S., and Nearing, G.: "Towards learning
-    universal, regional, and local hydrological behaviors via machine learning applied to large-sample datasets"
-    Hydrology and Earth System Sciences, 2019, 23, 5089-5110, doi:10.5194/hess-23-5089-2019
+       universal, regional, and local hydrological behaviors via machine learning applied to large-sample datasets"
+       Hydrology and Earth System Sciences, 2019, 23, 5089-5110, doi:10.5194/hess-23-5089-2019
 
     """
 

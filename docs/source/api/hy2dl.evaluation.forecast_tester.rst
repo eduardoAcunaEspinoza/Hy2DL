@@ -1,7 +1,7 @@
-LinearReservoir
+Forecast Tester
 ================
 
-.. automodule:: hy2dl.modelzoo.linear_reservoir
+.. automodule:: hy2dl.evaluation.forecast_tester
    :members:
    :undoc-members:
    :show-inheritance:

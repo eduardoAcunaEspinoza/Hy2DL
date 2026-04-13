@@ -475,22 +475,28 @@ class BaseDataset(Dataset):
     def setup_dataset(self, check_nan=True, path_scaler: Optional[Path | str] = None):
         """Get data ready for training or evaluation.
 
-        This is the function you should call to load and process the dataset, and get it ready for use. It process,
+        This is the function you should call to load and process the dataset, and get it ready for use. It processes,
         validates, maps, standardizes, and optimizes the dataset that will be sent to the model.
 
-        The setup follows these step:
+        The setup follows these steps:
+
         1. Load Data: Either processes the dataset from scratch or loads an existing pre-processed one. Processing the
-        dataset is done in `_process_df` and includes
-            - reading the raw data
-            - selecting the time periods and variables of interest
-            - adding additional and lagged features (if specified)
-            - reindexing the data to have a continuous time index.
+           dataset is done in `_process_df` and includes:
+
+           - reading the raw data
+           - selecting the time periods and variables of interest
+           - adding additional and lagged features (if specified)
+           - reindexing the data to have a continuous time index.
+
         2. Validate Samples: Look for valid samples or load a pre-computed list. Criteria for valid samples is defined
-        in `_valid_samples_mask`.
+           in `_valid_samples_mask`.
+
         3. Map indexes: Map the valid samples to the corresponding indexes in the dataset. This is necessary for
-        efficient data loading during training.
-        3. Calculate statistics: Calculate data statistics that are used for standardization.
-        4. Finalize: runs `_finalize_setup()` to optimize memory and data access speed.
+           efficient data loading during training.
+
+        4. Calculate statistics: Calculate data statistics that are used for standardization.
+
+        5. Finalize: runs `_finalize_setup()` to optimize memory and data access speed.
 
         Note: Even if `cfg.dataset_in_ram = True`, disk-based datasets are kept lazy for sample validation, mapping,
         and scaler calculation. If `cfg.dataset_in_ram = True` and enough RAM is available, the datasets will be moved
@@ -499,7 +505,7 @@ class BaseDataset(Dataset):
         Parameters
         ----------
         check_nan : bool, default=True
-            Check for nan values during validate_samples-
+            Check for nan values during `validate_samples`.
         path_scaler : Path or str, optional
             Path to saved `scaler.yml` file.
 
