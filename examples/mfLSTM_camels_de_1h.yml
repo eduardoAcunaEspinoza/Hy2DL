@@ -1,10 +1,6 @@
 experiment_name: LSTM_Simulation_CAMELS_DE_1h_benchmark
-path_data: /home/iwu/qt7760/data/CAMELS-DE-1h
-path_dataset_training: /home/iwu/qt7760/data/CAMELS-DE-1h/dataset_training.zarr
-path_dataset_validation: /home/iwu/qt7760/data/CAMELS-DE-1h/dataset_validation.zarr
-path_dataset_testing: /home/iwu/qt7760/data/CAMELS-DE-1h/dataset_testing.zarr
-path_entities: /home/iwu/qt7760/hy2dl_experiments/CAMELS_DE_1h_simulation/benchmark/experiment_settings/basins_camels_de_1h_1611.txt
-path_save_folder: /home/iwu/qt7760/hy2dl_experiments/CAMELS_DE_1h_simulation/benchmark/results
+path_data: ../data/CAMELS-DE-1h
+path_entities: ../data/basin_id/basins_camels_de_1h_1611.txt
 dynamic_input:
   1W:
   - precipitation_mean_gapfilled
