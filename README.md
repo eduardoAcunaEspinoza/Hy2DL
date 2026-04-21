@@ -1,10 +1,10 @@
-# Hy<sup>2</sup>DL: Hybrid Hydrological modeling using Deep Learning methods
+# Hy<sup>2</sup>DL: Hydrological modeling using Deep Learning methods
 ![Hy2DL Logo](https://raw.githubusercontent.com/eduardoAcunaEspinoza/Hy2DL/main/docs/source/_static/Hy2DL.png)
 
 <p align="justify">
-Hy<sup>2</sup>DL is a python library to create hydrological models for rainfall-runoff prediction using deep learning methods. The repository includes implementations with Large-Sample Hydrology datasets such as CAMELS-GB, CAMELS-US, CAMELS-DE, CAMELS-CH and CARAVAN. Besides data-driven architectures, the repository also supports hybrid hydrological models that combine machine learning with process-based knowledge.
+Hy<sup>2</sup>DL is a python library to create hydrological models for rainfall-runoff prediction using deep learning methods. The repository includes implementations with Large-Sample Hydrology datasets such as CAMELS-GB, CAMELS-US, CAMELS-DE, CAMELS-CH and CARAVAN.
 
-The logic of the codes presented here is based on 'NeuralHydrology --- A Python library for Deep Learning research in hydrology' (https://github.com/neuralhydrology/neuralhydrology.git).
+The folder structure and some of the code logic presented here is based on 'NeuralHydrology --- A Python library for Deep Learning research in hydrology' (https://github.com/neuralhydrology/neuralhydrology.git).
 
 ## Structure of the repository:
 The codes presented in the repository are in the form of python scripts. Additionally several experiments are in the form of JupyterNotebooks for easy reproduction and execution. Following is a quick overview of the repository structure:
