@@ -19,12 +19,12 @@ def get_tester(cfg: Config) -> BaseTester:
 
     """
     if cfg.forecast_signals == []:
-        if cfg.model.lower() == "lstmmdn":
+        if cfg.model.lower() in ["lstmmdn", "maskedarlstmmdn"]:
             evaluator = SimulationTesterMDN
         else:
             evaluator = SimulationTester
     else:
-        if cfg.model.lower() == "lstmmdn":
+        if cfg.model.lower() in ["lstmmdn", "maskedarlstmmdn"]:
             evaluator = ForecastTesterMDN
         else:
             evaluator = ForecastTester
