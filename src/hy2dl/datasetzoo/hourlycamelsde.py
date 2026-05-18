@@ -48,15 +48,15 @@ class Hourly_CAMELS_DE(CAMELS_DE):
         """
         # Read hourly data
         path_timeseries = self.cfg.path_data / "timeseries" / f"CAMELS_DE_1h_hydromet_timeseries_{gauge_id}.csv"
-        
+
         # load time series
-        df = pd.read_csv(path_timeseries, index_col="time", parse_dates=["time"])
+        df = pd.read_csv(path_timeseries, index_col="date", parse_dates=["date"])
 
         return df
 
     def _fill_precipitation_gaps(self, df):
         """
-        CAMELS-DE-1h already contains gap-filled precipitation data, instead of using the entirely gap-filled data, we could 
+        CAMELS-DE-1h already contains gap-filled precipitation data, instead of using the entirely gap-filled data, we could
         also fill the gaps with different strategies, e.g. based on gap length.
 
         Parameters
@@ -69,4 +69,6 @@ class Hourly_CAMELS_DE(CAMELS_DE):
         df: pd.DataFrame
             Dataframe with the catchments` timeseries with the gaps filled
         """
-        raise NotImplementedError("This method is not implemented yet. Would be possible to fill gaps with different strategies, e.g. based on gap length.")
+        raise NotImplementedError(
+            "This method is not implemented yet. Would be possible to fill gaps with different strategies, e.g. based on gap length."
+        )

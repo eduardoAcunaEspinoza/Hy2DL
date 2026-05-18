@@ -474,6 +474,10 @@ class Config(object):
     # From this point forward, we define properties to access the configuration values.
     # -----------------
     @property
+    def ar_teacher_forcing(self) -> bool:
+        return self._cfg.get("ar_teacher_forcing", True)
+
+    @property
     def batch_size_training(self) -> int:
         return self._cfg.get("batch_size_training")
 
@@ -728,6 +732,14 @@ class Config(object):
             folder = self.base_dir / "../results"
 
         return (folder / suffix).resolve()
+
+    @property
+    def path_save_zarr(self) -> Optional[Path]:
+        return self._prepare_path("path_save_zarr")
+
+    @path_save_zarr.setter
+    def path_save_zarr(self, value: str):
+        self._cfg["path_save_zarr"] = value
 
     @property
     def path_valid_samples_testing(self) -> Optional[Path]:

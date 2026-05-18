@@ -66,7 +66,12 @@ class BaseTester(object):
             .float()
             .to(self.cfg.device),
         }
-        self.path_zarr = self.cfg.path_save_folder / f"{evaluation_dataset.period}_results.zarr"
+        # Set path to save results
+        if self.cfg.path_save_zarr is None:
+            self.path_zarr = self.cfg.path_save_folder / f"{evaluation_dataset.period}_results.zarr"
+        else:
+            self.path_zarr = self.cfg.path_save_zarr
+        # Initialize validation report
         self.validation_report = ""
 
     def evaluate_model(self, model: torch.nn.Module):
