@@ -363,6 +363,36 @@ class BaseDataset(Dataset):
                 )
                 current_index += subset_length
 
+        # Hybrid model (input for conceptual part)
+        if self.cfg.conceptual_model is not None:
+            sample["x_d_conceptual"] = {}
+            for k, v in self.cfg.dynamic_input_conceptual_model.items():
+                var_list = [v] if isinstance(v, str) else v
+
+                # Extract the sequence (this returns standardized data)
+                x_conceptual = _extract_xd_sequence(
+                    var_list=var_list,
+                    id_idx=id_idx_hc,
+                    start_t_indices=start_hindcasts,
+                    length=self.cfg.seq_length_hindcast,
+                    as_dict=False,
+                )
+
+                # Variables for conceptual model should be in the original scale, so we back-transform them
+                var_mean = (
+                    torch.from_numpy(self.scaler.sel(statistic="mean", feature=var_list)["data"].values)
+                    .float()
+                    .view(1, 1, -1)
+                )
+                var_std = (
+                    torch.from_numpy(self.scaler.sel(statistic="std", feature=var_list)["data"].values)
+                    .float()
+                    .view(1, 1, -1)
+                )
+
+                x_conceptual = (x_conceptual * var_std) + var_mean
+                sample["x_d_conceptual"][k] = torch.nanmean(x_conceptual, dim=2)
+
         # --------------------------
         # Static input
         # --------------------------
@@ -566,6 +596,7 @@ class BaseDataset(Dataset):
         # --------------------------
         if path_scaler is None:  # calculate scaler and save it
             self._calculate_scaler()
+            self._load_scaler(path_scaler=self.cfg.path_save_folder / "scaler.yml")
         else:  # load scaler from existing file
             self._load_scaler(path_scaler=path_scaler)
 
@@ -650,9 +681,9 @@ class BaseDataset(Dataset):
         xd_std = self.ds_ts.sel(gauge_id=self.valid_gauges).std(dim=["gauge_id", "date"], skipna=True)
         xd_std = xd_std.where((xd_std.notnull()) & (xd_std >= 1e-5), 1.0)
         # Combine into one and computes the values
-        self.scaler = xr.concat([xd_mean, xd_std], dim="statistic")
-        self.scaler = self.scaler.assign_coords(statistic=["mean", "std"])
-        self.scaler = self.scaler.compute()
+        scaler_xd = xr.concat([xd_mean, xd_std], dim="statistic")
+        scaler_xd = scaler_xd.assign_coords(statistic=["mean", "std"])
+        scaler_xd = scaler_xd.compute()
 
         ### ------------------
         ### Forecast variables
@@ -666,9 +697,9 @@ class BaseDataset(Dataset):
             xfc_std = self.ds_fc.sel(gauge_id=self.valid_gauges).std(dim=["gauge_id", "date", "lead_time"], skipna=True)
             xfc_std = xfc_std.where((xfc_std.notnull()) & (xfc_std >= 1e-5), 1.0)
             # Combine into one and computes the values
-            self.scaler_fc = xr.concat([xfc_mean, xfc_std], dim="statistic")
-            self.scaler_fc = self.scaler_fc.assign_coords(statistic=["mean", "std"])
-            self.scaler_fc = self.scaler_fc.compute()
+            scaler_fc = xr.concat([xfc_mean, xfc_std], dim="statistic")
+            scaler_fc = scaler_fc.assign_coords(statistic=["mean", "std"])
+            scaler_fc = scaler_fc.compute()
 
         ### ------------------
         ### Static attributes
@@ -677,29 +708,39 @@ class BaseDataset(Dataset):
             xs_mean = self.ds_attributes.sel(gauge_id=self.valid_gauges).mean(dim=["gauge_id"], skipna=True).fillna(0.0)
             xs_std = self.ds_attributes.sel(gauge_id=self.valid_gauges).std(dim=["gauge_id"], skipna=True)
             xs_std = xs_std.where(xs_std.notnull() & (xs_std >= 1e-5), 1.0)
-            self.scaler_attributes = xr.concat([xs_mean, xs_std], dim="statistic")
-            self.scaler_attributes = self.scaler_attributes.assign_coords(statistic=["mean", "std"])
+            scaler_attributes = xr.concat([xs_mean, xs_std], dim="statistic")
+            scaler_attributes = scaler_attributes.assign_coords(statistic=["mean", "std"])
 
-        # Save scaler
+        # Group different scalers together in one dictionary
         scaler = {
-            "xd_mean": self.scaler.sel(statistic="mean").to_pandas()["data"].to_dict(),
-            "xd_std": self.scaler.sel(statistic="std").to_pandas()["data"].to_dict(),
+            "xd_mean": scaler_xd.sel(statistic="mean").to_pandas()["data"].to_dict(),
+            "xd_std": scaler_xd.sel(statistic="std").to_pandas()["data"].to_dict(),
         }
         if self.cfg.forecast_input:
             scaler.update(
                 {
-                    "xfc_mean": self.scaler_fc.sel(statistic="mean").to_pandas()["data"].to_dict(),
-                    "xfc_std": self.scaler_fc.sel(statistic="std").to_pandas()["data"].to_dict(),
+                    "xfc_mean": scaler_fc.sel(statistic="mean").to_pandas()["data"].to_dict(),
+                    "xfc_std": scaler_fc.sel(statistic="std").to_pandas()["data"].to_dict(),
                 }
             )
         if self.cfg.static_input:  # Update scaler dictionary with static attributes if applicable
             scaler.update(
                 {
-                    "xs_mean": self.scaler_attributes.sel(statistic="mean").to_pandas()["data"].to_dict(),
-                    "xs_std": self.scaler_attributes.sel(statistic="std").to_pandas()["data"].to_dict(),
+                    "xs_mean": scaler_attributes.sel(statistic="mean").to_pandas()["data"].to_dict(),
+                    "xs_std": scaler_attributes.sel(statistic="std").to_pandas()["data"].to_dict(),
                 }
             )
 
+        # Overwrite calculated scalers in case a custom scaler was provided
+        if self.cfg.custom_scaler is not None:  # custom_scaler: {'var_name': {'mean': #, 'std': #}}
+            for group_key, variables in scaler.items():
+                stat_type = group_key.split("_")[-1]
+                for var_name in variables.keys():
+                    if var_name in self.cfg.custom_scaler and stat_type in self.cfg.custom_scaler[var_name]:
+                        # Override the calculated value with the custom value
+                        scaler[group_key][var_name] = self.cfg.custom_scaler[var_name][stat_type]
+
+        # Save scaler to file
         with open(self.cfg.path_save_folder / "scaler.yml", "w") as file:
             yaml.dump(scaler, file, default_flow_style=False, sort_keys=False)
 
@@ -1523,8 +1564,9 @@ class BaseDataset(Dataset):
         # Examples:
         #   - Single group of variables and and single frequency
         #   - Multi-frequency approaches but all frequencies use the same single group of variables.
+        #   - Hybrid models (currently only supported for single frequency, single group)
         if isinstance(self.cfg.dynamic_input, list):
-            mask = _check_vars(var_list=self.cfg.dynamic_input, window_size=self.cfg.seq_length_hindcast)
+            mask = _check_vars(var_list=self.hindcast_input, window_size=self.cfg.seq_length_hindcast)
             is_valid = is_valid & mask
 
         # Case 2: If we have multiple groups of variables, and use the same groups along the whole sequence.

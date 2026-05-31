@@ -1,4 +1,4 @@
-experiment_name: LSTM_Simulation_CAMELS_DE_1h_benchmark
+experiment_name: LSTM_CAMELS_DE_1h_benchmark
 path_data: ../data/CAMELS-DE-1h
 path_entities: ../data/basin_id/basins_camels_de_1h_1611.txt
 dynamic_input:

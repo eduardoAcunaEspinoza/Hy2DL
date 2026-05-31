@@ -1,6 +1,6 @@
 experiment_name: LSTM_CAMELS_DE
 path_data: ../data/CAMELS_DE
-path_entities: ../data/basin_id/basins_camels_de_1583.txt
+path_entities: ../data/basin_id/basins_camels_de_1582.txt
 dynamic_input:
 - precipitation_mean
 - precipitation_stdev

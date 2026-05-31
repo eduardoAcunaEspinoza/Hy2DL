@@ -490,6 +490,10 @@ class Config(object):
         return self._cfg.get("conceptual_model")
 
     @property
+    def custom_scaler(self) -> Optional[dict[str, dict[str, float]]]:
+        return self._cfg.get("custom_scaler")
+
+    @property
     def custom_seq_processing(self) -> Optional[dict[str, dict[str, int]]]:
         return self._cfg.get("custom_seq_processing")
 
@@ -611,6 +615,10 @@ class Config(object):
     @property
     def nan_probability(self) -> Optional[dict[str, dict[str, float]]]:
         return self._cfg.get("nan_probability")
+
+    @nan_probability.setter
+    def nan_probability(self, value: dict[str, dict[str, float]]):
+        self._cfg["nan_probability"] = value
 
     @property
     def nan_probabilistic_masking(self) -> bool:

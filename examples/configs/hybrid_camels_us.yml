@@ -1,20 +1,17 @@
-experiment_name: LSTM_CAMELS_US
+experiment_name: Hybrid_CAMELS_US
 path_data: ../data/CAMELS_US
 path_entities: ../data/basin_id/basins_camels_us_531.txt
+path_additional_features: ../data/CAMELS_US/pet_hargreaves.zarr
 dynamic_input:
-- prcp(mm/day)_daymet
-- PRCP(mm/day)_nldas
-- PRCP(mm/day)_maurer
-- srad(W/m2)_daymet
-- tmax(C)_daymet
-- tmin(C)_daymet
-- vp(Pa)_daymet
+- prcp(mm/day)
+- srad(W/m2)
+- tmax(C)
+- tmin(C)
+- vp(Pa)
 target:
 - QObs(mm/d)
 forcings:
 - daymet
-- nldas
-- maurer
 static_input:
 - elev_mean
 - slope_mean
@@ -52,26 +49,37 @@ validation_period:
 testing_period:
 - '1989-10-01'
 - '1999-10-30'
-seq_length: 365
+hidden_size: 256
 batch_size_training: 256
-batch_size_evaluation: 1024
-epochs: 10
-dropout_rate: 0.5
-initial_forget_bias: 3.0
+batch_size_evaluation: 100
+epochs: 30
+dropout_rate: 0.4
 learning_rate:
-  1: 0.0005
-validate_every: 1
-device: gpu
-num_workers: 4
-random_seed: 42
+  1: 0.001
+  10: 0.0005
+  20: 0.0001
+validate_every: 4
+max_updates_per_epoch: 450
+seq_length: 730
+predict_last_n: 365
+device: cuda:0
+num_workers: 8
 dataset: camels_us
-predict_last_n: 1
-model: lstmmdn
-distribution: laplacian
-num_mixture_components: 3
-hidden_size: 250
-noise_level: 0.1
-loss : nll
-validation_metric:
-- nse
-- nll
+model: hybrid
+conceptual_model: hbv
+num_conceptual_models: 16
+dynamic_input_conceptual_model:
+  precipitation: prcp(mm/day)
+  pet: pet(mm/day)
+  temperature:
+  - tmax(C)
+  - tmin(C)
+dynamic_parameterization_conceptual_model:
+- BETA
+- BETAET
+routing_model: uh_routing
+custom_scaler:
+  QObs(mm/d):
+    mean: 0
+    std: 1
+initial_forget_bias: 3.0

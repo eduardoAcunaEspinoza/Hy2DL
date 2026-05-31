@@ -1,4 +1,4 @@
-experiment_name: mfLSTM_camels_us_hourly_ForcingsPerFreq
+experiment_name: camels_us_hourly_ForcingsPerFreq
 path_data: ../data/CAMELS_US
 path_entities: ../data/basin_id/basins_camels_us_hourly_516.txt
 dynamic_input:
@@ -75,18 +75,18 @@ validation_period:
 - '2003-10-01 00:00:00'
 - '2008-09-30 23:00:00'
 testing_period:
-- '2008-10-01 00:00:00'
-- '2018-09-30 23:00:00'
+- '2003-10-01 00:00:00'
+- '2008-09-30 23:00:00'
 hidden_size: 128
 batch_size_training: 256
 batch_size_evaluation: 1024
-epochs: 1
+epochs: 30
 dropout_rate: 0.4
 learning_rate:
   1: 0.0005
   10: 0.0001
   25: 1.0e-05
-validate_every: 1
+validate_every: 4
 seq_length: 8760
 custom_seq_processing:
   1D:
@@ -101,9 +101,8 @@ unique_prediction_blocks: true
 dynamic_embedding:
   hiddens:
   - 10
-device: gpu
+device: cuda:0
 num_workers: 4
-random_seed: 110
 dataset: hourly_camels_us
 model: CudaLSTM
 initial_forget_bias: 3.0

@@ -128,6 +128,73 @@ class BaseDistribution(nn.Module):
         """
         raise NotImplementedError
 
+    def pit(
+        self,
+        params: dict[str, torch.Tensor],
+        weights: torch.Tensor,
+        x: torch.Tensor,
+        bins: torch.Tensor,
+        average: bool = True,
+    ) -> torch.Tensor:
+        """Calculate the probability integral transform (PIT) values for the given observations `x` under the predicted
+        mixture distribution.
+
+        Parameters
+        ----------
+        params: dict[str, torch.Tensor]
+            Dictionary containing the parameters of the mixture distribution, with shape [B, N, K, T] for each parameter
+        weights: torch.Tensor
+            Mixture weights, with shape [B, N, K, T].
+        x: torch.Tensor
+            Observed values for which to calculate the PIT, with shape [B, N, T].
+        bins: torch.Tensor
+            Bin edges for the PIT histogram, with shape [num_bins + 1].
+        average: bool, default=True
+            Whether to average the PIT values across the B (batch) dimension or return them separately.
+
+        Returns
+        -------
+        list[torch.Tensor]
+            PIT values for each T.
+
+        """
+
+        def cdf_to_freq(cdf_values: torch.Tensor, bins: torch.Tensor) -> torch.Tensor:
+            """Helper function to convert CDF values to cumulative frequencies for the PIT histogram."""
+            # Auxiliary tensor
+            zero_tensor = torch.tensor([0.0], device=cdf_values.device, dtype=cdf_values.dtype)
+            # Filter NaNs
+            cdf_values = cdf_values[~torch.isnan(cdf_values)]
+            # Calculate cummulative frequencies from the CDF values using the specified bins
+            if len(cdf_values) > 0:
+                counts, _ = torch.histogram(cdf_values, bins=bins)
+                freq = counts / counts.sum()
+                cum_freq = torch.cumsum(freq, dim=0)
+                cum_freq = torch.cat((zero_tensor, cum_freq))
+                return cum_freq
+            else:
+                # If there are no valid CDF values (e.g., all NaNs), return a zero tensor of the appropriate shape
+                return torch.zeros(len(bins), device=cdf_values.device, dtype=cdf_values.dtype)
+
+        with torch.no_grad():
+            cdf = self.calc_cdf(params=params, weights=weights, x=x)  # [B, N, T]
+
+        # The last dimension of x is the number of target variables (T). We want to calculate the PIT for each target
+        # variable separately, so we need to loop over the T dimension and calculate the PIT for each one
+        pit_per_target = []
+        for idx in range(x.shape[-1]):
+            if average:
+                cum_freq = cdf_to_freq(cdf_values=cdf[:, :, idx].flatten(), bins=bins)
+                pit_per_target.append(cum_freq)
+
+            else:
+                pit_per_sample = []
+                for sample_idx in range(cdf.shape[0]):
+                    pit_per_sample.append(cdf_to_freq(cdf_values=cdf[sample_idx, :, idx].flatten(), bins=bins))
+                pit_per_target.append(torch.stack(pit_per_sample, dim=0))  # [B, num_bins + 1]
+
+        return pit_per_target
+
     def quantile(
         self,
         params: dict[str, torch.Tensor],
