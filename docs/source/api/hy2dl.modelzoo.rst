@@ -12,3 +12,4 @@ hy2dl.modelzoo
    hy2dl.modelzoo.cudalstm
    hy2dl.modelzoo.inputlayer
    hy2dl.modelzoo.lstmmdn
+   hy2dl.modelzoo.hybrid

@@ -353,6 +353,8 @@ Forecast model
 - ``seq_length_forecast`` (int):
     Length of the input sequence for forecast period.
 
+.. _mdn_reference:
+
 Probabilistic model
 -----------------------
 
@@ -361,6 +363,38 @@ Probabilistic model
 
 - ``distribution`` (str):
     Probability distribution used in the MDN. Currently implemented are "gaussian" for gaussian and "laplace" for asymmetric laplacian.
+
+.. _hybrid_reference:
+
+Hybrid model
+-----------------------------
+- ``conceptual_model`` (str):
+    Name of the hydrological conceptual model that is used together with a data-driven method to create the hybrid model. 
+    Currently implemented: "shm", "linear_reservoir", "nonsense", "hbv".
+
+- ``dynamic_input_conceptual_model`` (dict[str, list[str]]):
+    Dictionary mappping the variables taken as input by the conceptual model to variables in our dataset. If one specify multiple dataset variables, the 
+    average of this variables will be taken as input for the conceptual model.
+
+.. code-block:: python
+
+    # Example dynamic input for conceptual model
+    dynamic_input_conceptual_model = {
+        "precipitation": "prcp(mm/day)",
+        "pet": "pet(mm/day)",
+        "temperature": ["tmax(C)", "tmin(C)"]
+    }
+
+- ``dynamic_parameterization_conceptual_model`` (list[str]):
+    List to specify which of the parameters of the conceptual model will be dynamic. That is, which parameters will vary in time. 
+    If not specifiy, the parameter is taken as static.
+
+- ``num_conceptual_models`` (int):
+    Number of conceptual models that will run on parallel. The LSTM  will provide static or dynamic parametrization for each of the "n" conceptual models 
+    and the output of these models is combined to get the final discharge prediction. The default is 1.
+
+- ``routing_model`` (str):
+    Name of the additional routing model that will be used after the conceptual model. Currently only "uh_routing" is available, where a unit hydrograph based on the gamma function is used.
 
 CAMELS US specific
 -----------------------

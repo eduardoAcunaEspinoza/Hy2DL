@@ -9,3 +9,4 @@ The following section gives an overview of the implemented models and their poss
 
    modelzoo/cudalstm
    modelzoo/lstmmdn
+   modelzoo/hybrid

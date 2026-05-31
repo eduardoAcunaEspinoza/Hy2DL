@@ -4,7 +4,7 @@ LSTM-MDN
 :py:class:`hy2dl.modelzoo.lstmmdn.LSTMMDN` combines an LSTM network with a Mixture Density Network (MDN) output layer. The MDN layer allows modeling the output as a mixture of probability distributions, 
 enabling probabilistic predictions.
 
-Currently available distributions are: `gaussian` and `asymmetric_laplacian`. Further details can be found in `hy2dl.utils.distributions`
+Currently available distributions are: `gaussian` and `asymmetric_laplacian`. Further details can be found in `hy2dl.utils.distributions` and :ref:`mdn_reference`
 
 .. figure:: ../../_static/lstm_mdn.png
    :alt: LSTM with mix density network output layer.
