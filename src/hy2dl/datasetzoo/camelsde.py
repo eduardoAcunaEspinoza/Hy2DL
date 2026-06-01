@@ -46,7 +46,6 @@ class CAMELS_DE(BaseDataset):
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
         super(CAMELS_DE, self).__init__(cfg=cfg, time_period=time_period, gauge_id=gauge_id)
-        # super(CAMELS_DE, self).__init__(cfg=cfg, time_period=time_period)
 
     def _read_attributes(self) -> pd.DataFrame:
         """Read the catchments` attributes

@@ -3,6 +3,7 @@ from hy2dl.datasetzoo.camelsch import CAMELS_CH
 from hy2dl.datasetzoo.camelsde import CAMELS_DE
 from hy2dl.datasetzoo.camelsgb import CAMELS_GB
 from hy2dl.datasetzoo.camelsus import CAMELS_US
+from hy2dl.datasetzoo.camelspl import CAMELS_PL
 from hy2dl.datasetzoo.caravan import CARAVAN
 from hy2dl.datasetzoo.hourlycamelsde import Hourly_CAMELS_DE
 from hy2dl.datasetzoo.hourlycamelsus import Hourly_CAMELS_US
@@ -14,6 +15,7 @@ dataset_registry = {
     "camels_gb": CAMELS_GB,
     "camels_de": CAMELS_DE,
     "camels_ch": CAMELS_CH,
+    "camels_pl": CAMELS_PL,
     "caravan": CARAVAN,
     "hourly_camels_us": Hourly_CAMELS_US,
     "hourly_camels_de": Hourly_CAMELS_DE,

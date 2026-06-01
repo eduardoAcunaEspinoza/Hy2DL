@@ -8,13 +8,12 @@ from hy2dl.datasetzoo.basedataset import BaseDataset
 from hy2dl.utils.config import Config
 
 
-class CAMELS_GB(BaseDataset):
-    """Class to process data from the CAMELS GB dataset [1]_ .
+class CAMELS_PL(BaseDataset):
+    """
+    Class to process data from the CAMELS Poland dataset.
 
     The class inherits from BaseDataset to execute the operations on how to load and process the data. However here we
-    code the _read_attributes and _read_data methods, that specify how we should read the information from CAMELS GB.
-
-    This class was adapted from NeuralHydrology [2]_
+    code the _read_attributes and _read_data methods, that specify how we should read the information from CAMELS PL.
 
     Parameters
     ----------
@@ -27,12 +26,9 @@ class CAMELS_GB(BaseDataset):
 
     References
     ----------
-    .. [1] Coxon, G., Addor, N., Bloomfield, J. P., Freer, J., Fry, M., Hannaford, J., Howden, N. J. K., Lane, R.,
-        Lewis, M., Robinson, E. L., Wagener, T., and Woods, R.: CAMELS-GB: Hydrometeorological time series and
-        landscape attributes for 671 catchments in Great Britain, Earth Syst. Sci. Data Discuss.,
-        https://doi.org/10.5194/essd-2020-49, in review, 2020.
-    .. [2] F. Kratzert, M. Gauch, G. Nearing and D. Klotz: NeuralHydrology -- A Python library for Deep Learning
-        research in hydrology. Journal of Open Source Software, 7, 4050, doi: 10.21105/joss.04050, 2022
+    .. [1] Brzezińska, W., Dolich, A., Perz, A. E., Maharjan, A., Loritz, R., & Wrzesiński, D. (2026). CAMELS-PL:
+    hydro-meteorological time series and landscape attributes for 354 catchments in Poland (1.0.0) [Data set].
+    Zenodo. https://doi.org/10.5281/zenodo.20133183
 
     """
 
@@ -43,7 +39,7 @@ class CAMELS_GB(BaseDataset):
         gauge_id: Optional[str | list[str]] = None,
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
-        super(CAMELS_GB, self).__init__(cfg=cfg, time_period=time_period, gauge_id=gauge_id)
+        super(CAMELS_PL, self).__init__(cfg=cfg, time_period=time_period, gauge_id=gauge_id)
 
     def _read_attributes(self) -> pd.DataFrame:
         """Read the catchments` attributes
@@ -91,13 +87,11 @@ class CAMELS_GB(BaseDataset):
 
         Returns
         -------
-        df : pd.DataFrame
+        df: pd.DataFrame
             Dataframe with the catchments` timeseries
 
         """
-        path_timeseries = (
-            self.cfg.path_data / "timeseries" / f"CAMELS_GB_hydromet_timeseries_{gauge_id}_19701001-20150930.csv"
-        )
+        path_timeseries = self.cfg.path_data / "timeseries" / f"CAMELS_PL_hydromet_timeseries_{gauge_id}.csv"
         # load time series
         df = pd.read_csv(
             path_timeseries, index_col="date", parse_dates=["date"], dtype=defaultdict(lambda: "float32", date=str)
