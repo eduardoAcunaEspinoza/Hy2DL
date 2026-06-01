@@ -1,0 +1,58 @@
+experiment_name: LSTM_CAMELS_CH
+path_data: ../data/CAMELS_CH
+path_entities: ../data/basin_id/basins_camels_ch_331.txt
+dynamic_input:
+- precipitation(mm/d)
+- temperature_min(degC)
+- temperature_mean(degC)
+- temperature_max(degC)
+target:
+- discharge_spec(mm/d)
+static_input:
+- area
+- elev_mean
+- slope_mean
+- sand_perc
+- silt_perc_50
+- clay_perc
+- coarse_fragm_perc
+- bulk_dens
+- water_perc
+- crop_perc
+- grass_perc
+- scrub_perc
+- dwood_perc
+- ewood_perc
+- wetlands_perc
+- ice_perc
+- rock_perc
+- urban_perc
+- num_reservoir
+- reservoir_he
+- reservoir_fs
+training_period:
+- '1992-01-01'
+- '2023-12-31'
+validation_period:
+- '1992-01-01'
+- '2023-12-31'
+testing_period:
+- '1992-01-01'
+- '2023-12-31'
+seq_length: 365
+hidden_size: 125
+batch_size_training: 256
+batch_size_evaluation: 1024
+epochs: 20
+dropout_rate: 0.4
+learning_rate:
+  1: 0.001
+  10: 0.0005
+  20: 0.0001
+validate_every: 1
+device: cuda:0
+num_workers: 4
+random_seed: 1
+dataset: camels_ch
+model: cudalstm
+initial_forget_bias: 3.0
