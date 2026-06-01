@@ -8,7 +8,7 @@ The folder structure and some of the code logic presented here is based on [Neur
 
 ## Structure of the repository:
 The codes presented in the repository are in the form of python scripts. Additionally several experiments are in the form of JupyterNotebooks for easy reproduction and execution. Following is a quick overview of the repository structure:
-- **benchmarks**: Comparison of our library against other studies from scientific literature.
+- **benchmarks**: Comparison of our library against other studies from scientific literature. 
 - **data**: Folder where the different datasets (e.g CAMELS-GB, CAMELS-US...) should be added. This information should be independently downloaded by the user.
 - **docs**: Library documentation
 - **examples**: Codes (.py) and configuration files to run multiple examples.
@@ -42,9 +42,12 @@ If you find **Hy²DL** useful in your research or applications, please cite it a
   author       = {Eduardo Acuna and
                   Manuel Álvarez Chaves and
                   Alexander Dolich and
-                  Ashish Manoj J},
-  title        = {Hy2DL: Hybrid Hydrological modeling using Deep Learning methods},
-  year         = 2025,
+                  Benedikt Heudorfer and
+                  Ashish Manoj J and
+                  Wiktoria Brzezińska and
+                  Mirko Mälicke},
+  title        = {Hy2DL: Hydrological modeling using Deep Learning methods},
+  year         = 2026,
   publisher    = {Zenodo},
   doi          = {10.5281/zenodo.17251944},
   url          = {https://doi.org/10.5281/zenodo.17251944},

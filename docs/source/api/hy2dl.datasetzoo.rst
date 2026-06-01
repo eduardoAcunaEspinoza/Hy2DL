@@ -13,6 +13,7 @@ hy2dl.datasetzoo
    hy2dl.datasetzoo.camelsch
    hy2dl.datasetzoo.camelsde
    hy2dl.datasetzoo.camelsgb
+   hy2dl.datasetzoo.camelspl
    hy2dl.datasetzoo.camelsus
    hy2dl.datasetzoo.caravan
    hy2dl.datasetzoo.hourlycamelsus

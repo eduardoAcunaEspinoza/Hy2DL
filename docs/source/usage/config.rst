@@ -18,6 +18,9 @@ Experiment configuration
 - ``path_save_folder`` (str): 
     Path to the directory where experiment results will be stored.  If not specified, a folder will automatically be created at: ``../results/<experiment_name>_seed_<random_seed>``
 
+- ``path_save_zarrr`` (str): 
+    Path where the results of the experiment will be stored in a .zarr format. If not specified, the results will be stored in a .zarr file in the ``path_save_folder`` with the name ``testing_results.zarr``
+
 - ``random_seed`` (int): 
     Random seed for reproducibility. If not specified, a random seed will be generated automatically
 
