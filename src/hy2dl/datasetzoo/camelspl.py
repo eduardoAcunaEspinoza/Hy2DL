@@ -27,8 +27,8 @@ class CAMELS_PL(BaseDataset):
     References
     ----------
     .. [1] Brzezińska, W., Dolich, A., Perz, A. E., Maharjan, A., Loritz, R., & Wrzesiński, D. (2026). CAMELS-PL:
-    hydro-meteorological time series and landscape attributes for 354 catchments in Poland (1.0.0) [Data set].
-    Zenodo. https://doi.org/10.5281/zenodo.20133183
+        hydro-meteorological time series and landscape attributes for 354 catchments in Poland (1.0.0) [Data set].
+        Zenodo. https://doi.org/10.5281/zenodo.20133183
 
     """
 
