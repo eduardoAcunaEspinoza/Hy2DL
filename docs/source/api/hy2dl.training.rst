@@ -9,7 +9,6 @@ hy2dl.training
 .. toctree::
    :maxdepth: 4
 
+   hy2dl.training.basetrainer
    hy2dl.training.loss
-
-
-
+   hy2dl.training.optimizer

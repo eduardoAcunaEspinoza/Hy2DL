@@ -35,6 +35,20 @@ CAMELS_DE/
   CAMELS_DE_xxx_attributes.csv
 ```
 
+### CAMELS-DE-1h
+
+The CAMELS-DE-1h dataset can be downloaded [here](https://doi.org/10.5880/fidgeo.2026.045).
+To add this dataset to the library, use the following folder structure:
+
+```
+CAMELS-DE-1h/
+  timeseries/ 
+  CAMELS_DE_1h_climatic_attributes.csv
+  CAMELS_DE_1h_humaninfluence_attributes.csv
+  ...
+  CAMELS_DE_1h_xxx_attributes.csv
+```
+
 ### CAMELS_GB
 
 The CAMELS_GB dataset can be downloaded from [Zenodo](https://doi.org/10.5285/8344e4f3-d2ea-44f5-8afa-86d2987543a9).
@@ -49,9 +63,26 @@ CAMELS_GB/
   CAMELS_GB_xxx_attributes.csv
 ```
 
+### CAMELS_PL
+
+The CAMELS_PL dataset can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.20133183).
+To add this dataset to the library, use the following folder structure:
+
+```
+CAMELS_PL/
+  timeseries/
+  CAMELS_PL_climatic_attributes.csv
+  CAMELS_PL_hydrologic_attributes..csv
+  ...
+  CAMELS_PL_xxx_attributes.csv
+```
+
 ### CAMELS_US
 
-The CAMELS_US dataset can be downloaded from [Zenodo](https://doi.org/10.5065/D6MW2F4D).
+The CAMELS_US dataset can be downloaded from [Zenodo](https://doi.org/10.5065/D6MW2F4D). If neccesary,
+the extended Maurer and NLDAS forcings (which include daily minimum and maximum temperature) can be
+downloaded from [Hydroshare_Maurer](https://www.hydroshare.org/resource/17c896843cf940339c3c3496d0c1c077/)
+and [Hydroshare_NLDAS](https://www.hydroshare.org/resource/0a68bfd7ddf642a8be9041d60f40868c/)
 To add this dataset to the library, use the following folder structure:
 
 ```
@@ -60,6 +91,8 @@ CAMELS_US/
     daymet/
     maurer/
     nldas/ 
+    maurer_extended/
+    nldas_extended/
   camels_attributes_v2.0/
     camels_clim.txt
     camels_geol.txt

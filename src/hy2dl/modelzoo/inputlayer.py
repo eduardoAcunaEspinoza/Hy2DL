@@ -1,5 +1,5 @@
 from itertools import chain
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -34,7 +34,9 @@ class InputLayer(nn.Module):
             self.dynamic_input = cfg.dynamic_input
             self._x_d_key = "x_d"
         elif embedding_type == "forecast":
-            self.dynamic_input = cfg.forecast_input
+            self.dynamic_input = (
+                cfg.forecast_signals if cfg.pseudo_forecast_ar_input == [] else cfg.extended_forecast_signals
+            )
             self._x_d_key = "x_d_fc"
         else:
             raise ValueError("embedding_type must be either 'hindcast' or 'forecast'")
@@ -52,6 +54,12 @@ class InputLayer(nn.Module):
         else:
             self.static_input_size = cfg.static_embedding["hiddens"][-1]
 
+        # Get length of the input sequence
+        if self.embedding_type == "forecast" or not cfg.custom_seq_processing_flag:
+            self.input_seq_length = getattr(cfg, f"seq_length_{self.embedding_type}", None)
+        else:
+            self.input_seq_length = sum(v["n_steps"] for v in cfg.custom_seq_processing.values())
+
         # Get embedding networks
         self._get_embeddings(cfg)
 
@@ -64,15 +72,14 @@ class InputLayer(nn.Module):
         # Save config
         self.cfg = cfg
 
-    def forward(
-        self, sample: dict[str, torch.Tensor | dict[str, torch.Tensor]], assemble: bool = True
-    ) -> torch.Tensor | dict[str, torch.Tensor]:
+    def forward(self, sample: dict[str, Any], assemble: bool = True) -> torch.Tensor | dict[str, torch.Tensor]:
         """Forward pass of embedding networks.
 
         Parameters
         ----------
-        sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]
-            Dictionary with the different tensors / dictionaries that will be used for the forward pass.
+        sample: dict[str, Any]
+            Dictionary with the different variables that will be used in the forward pass,
+            see `hy2dl.datasetzoo.basedataset.Basedataset.__getitems__()` for details.
 
         assemble: bool
             Whether to assemble the different tensors into a single tensor or return a dictionary with the different
@@ -160,7 +167,6 @@ class InputLayer(nn.Module):
             Configuration file.
 
         """
-
         # -------------------------
         # Embeddings for dynamic variables
         # -------------------------
@@ -182,7 +188,7 @@ class InputLayer(nn.Module):
         elif (cfg.custom_seq_processing is None or self.embedding_type == "forecast") and isinstance(
             self.dynamic_input, dict
         ):
-            # With masked_mean architecture I need one embedding per group!
+            # With masked_mean architecture I need one embedding per group.
             if cfg.nan_handling_method == "masked_mean":
                 self.emb_x_d[self._x_d_key] = nn.ModuleDict()
                 for k, v in self.dynamic_input.items():
@@ -219,7 +225,7 @@ class InputLayer(nn.Module):
                     # Case 3.2.2  If we have multiple groups of variables
                     # Note: We have multiple groups, therefore we use nan_handling methods!
                     elif isinstance(self.dynamic_input[freq], dict):
-                        # With masked_mean architecture I need one embedding per group!
+                        # With masked_mean architecture I need one embedding per group.
                         if cfg.nan_handling_method == "masked_mean":
                             self.emb_x_d[f"{self._x_d_key}_{freq}"] = nn.ModuleDict()
                             for k, v in self.dynamic_input[freq].items():
@@ -260,11 +266,10 @@ class InputLayer(nn.Module):
 
         References
         ----------
-        .. [#] M. Gauch, F. Kratzert, D. Klotz, G. Nearing, D. Cohen and o. Gilon : How to deal w___ missing input data
-            research in hydrology. EGUsphere, 1, 21, doi: 10.5194/egusphere-2025-1224, 2025
+        .. [#] M. Gauch, F. Kratzert, D. Klotz, G. Nearing, D. Cohen and O. Gilon : How to deal w___ missing input data.
+            Hydrology and Earth System Sciences, 29(21), 6221–6235. https://doi.org/10.5194/hess-29-6221-2025, 2025
 
         """
-
         x_d = []
         # Compute group-level dropout mask
         if self.cfg.nan_probabilistic_masking:
@@ -332,8 +337,8 @@ class InputLayer(nn.Module):
 
         References
         ----------
-        .. [#] M. Gauch, F. Kratzert, D. Klotz, G. Nearing, D. Cohen and o. Gilon : How to deal w___ missing input data
-            research in hydrology. EGUsphere, 1, 21, doi: 10.5194/egusphere-2025-1224, 2025
+        .. [#] M. Gauch, F. Kratzert, D. Klotz, G. Nearing, D. Cohen and O. Gilon : How to deal w___ missing input data.
+            Hydrology and Earth System Sciences, 29(21), 6221–6235. https://doi.org/10.5194/hess-29-6221-2025, 2025
 
         """
 
@@ -407,10 +412,9 @@ class InputLayer(nn.Module):
         drop_group = torch.rand(sample["y_obs"].shape[0], len(nan_seq_probs), device=self.cfg.device) < nan_seq_probs
         all_dropped = drop_group.all(dim=1)
         if all_dropped.any():  # Don't allow all groups to be dropped out.
-            # For samples with all groups dropped, randomly un-drop one group
             drop_group[
                 torch.where(all_dropped)[0], torch.randint(0, drop_group.size(1), (1,), device=self.cfg.device)
-            ] = False
+            ] = False  # For samples with all groups dropped, randomly un-drop one group
 
         return dict(zip(self.cfg.nan_probability.keys(), drop_group.T, strict=True))
 

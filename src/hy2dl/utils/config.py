@@ -1,5 +1,6 @@
 import os
 import random
+from itertools import chain
 from pathlib import Path
 from typing import Any, Optional
 
@@ -7,7 +8,6 @@ import numpy as np
 import torch
 import yaml
 
-from hy2dl.utils.distributions import Distribution
 from hy2dl.utils.logging import get_logger
 
 
@@ -18,8 +18,13 @@ class Config(object):
     ----------
     yml_path_or_dict : Union[str, dict]
         Either a path to the config file or a dictionary of configuration values.
+    base_dir : Path
+        Base directory. It is use to resolve relative paths in the configuration.
+    dev_mode : bool, default=False
+        Whether to skip some checks for unknown keys in the configuration. This can be useful during development when
+        the configuration is still changing frequently.
 
-     This class and its methods are based on Neural Hydrology [#]_ and adapted for our specific case.
+     This class is based on Neural Hydrology [#]_ and adapted for our specific case.
 
     References
     ----------
@@ -27,7 +32,10 @@ class Config(object):
         research in hydrology. Journal of Open Source Software, 7, 4050, doi: 10.21105/joss.04050, 2022
     """
 
-    def __init__(self, yml_path_or_dict: dict, dev_mode: bool = False):
+    def __init__(self, yml_path_or_dict: dict, base_dir: Path, dev_mode: bool = False):
+        # Base directory, to resolve relative paths
+        self.base_dir = base_dir
+
         # read the config from a dictionary
         self._cfg = self._read_yaml(yml_path_or_dict)
 
@@ -39,8 +47,10 @@ class Config(object):
         self._check_dynamic_inputs()
         self._check_seq_length()
         self._check_embeddings()
+        self._check_forecast()
+        self._check_nan_settings_hc()
         self._check_models()
-        self._check_nan_settings()
+        self._check_metrics()
         self._check_num_workers()
         self._device = Config._check_device(device=self._cfg.get("device", "cpu"))
 
@@ -73,7 +83,9 @@ class Config(object):
                         raise ValueError("Groups of variables are only supported with a `nan_handling_method`")
 
     def _check_embeddings(self):
-        if isinstance(self.dynamic_input, dict) and self.dynamic_embedding is None:
+        has_embedding = self.dynamic_embedding is not None
+
+        if isinstance(self.dynamic_input, dict) and not has_embedding:
             raise ValueError("`dynamic_input` as dictionary is only supported when `dynamic_embedding` is specified")
 
         if self.static_input is None and self.static_embedding is not None:
@@ -83,38 +95,206 @@ class Config(object):
             if set(self.dynamic_input.keys()) != set(self.custom_seq_processing.keys()):
                 raise ValueError("`dynamic_input` and `custom_seq_processing` must have the same keys.")
 
-        if isinstance(self.nan_handling_method, str) and self.dynamic_embedding is None:
+        if isinstance(self.nan_handling_method, str) and not has_embedding:
             raise ValueError("`dynamic_embedding` must be specified when using `nan_handling_method`")
 
-        if (
-            self.forecast_input
-            and self.dynamic_embedding is None
-            and len(self.forecast_input) != len(self.dynamic_input)
-        ):
+    def _check_forecast(self):
+        pfi = self.pseudo_forecast_input
+        fi = self.forecast_input
+        di = self.dynamic_input
+        has_embedding = self.dynamic_embedding is not None
+        pfi_ar = self.pseudo_forecast_ar_input
+
+        # 1. Embedding check
+        if (isinstance(pfi, dict) or isinstance(fi, dict)) and not has_embedding:
             raise ValueError(
-                (
-                    "`dynamic_input` and `forecast_input` have different dimensions. "
-                    "This is supported only if `dynamic_embedding` is specified"
-                )
+                "`dynamic_embedding` must be specified when either "
+                "`pseudo_forecast_input` or `forecast_input` are dictionaries."
             )
+        if pfi_ar and not has_embedding:
+            raise ValueError("`dynamic_embedding` must be specified when `pseudo_forecast_ar_input` is used.")
+
+        # 2. Both are dictionaries
+        if isinstance(pfi, dict) and isinstance(fi, dict):
+            if not set(pfi).isdisjoint(fi):
+                raise ValueError("Keys from `pseudo_forecast_input` and `forecast_input` must be different.")
+
+            pfi_values = set(chain.from_iterable(pfi.values()))
+            fi_values = set(chain.from_iterable(fi.values()))
+            if not pfi_values.isdisjoint(fi_values):
+                raise ValueError("Values from `pseudo_forecast_input` and `forecast_input` must be different.")
+
+        # 3. Both are lists
+        elif isinstance(pfi, list) and isinstance(fi, list) and pfi and fi:
+            are_equal = pfi == fi
+            are_disjoint = set(pfi).isdisjoint(fi)
+
+            if not are_equal and not are_disjoint:
+                raise ValueError(
+                    "`pseudo_forecast_input` and `forecast_input` must be either identical "
+                    "(including element order) or completely different. Partial overlap is not supported."
+                )
+
+            if are_disjoint and not has_embedding:
+                raise ValueError(
+                    "When `pseudo_forecast_input` and `forecast_input` are different, "
+                    "`dynamic_embedding` must be specified."
+                )
+
+        # 4. Mixed Types (One Dict, One List)
+        elif isinstance(pfi, dict) and isinstance(fi, list) and fi:
+            pfi_values = set(chain.from_iterable(pfi.values()))
+            if not pfi_values.isdisjoint(fi):
+                raise ValueError("Values from `pseudo_forecast_input` and `forecast_input` must be different.")
+
+        elif isinstance(fi, dict) and isinstance(pfi, list) and pfi:
+            fi_values = set(chain.from_iterable(fi.values()))
+            if not fi_values.isdisjoint(pfi):
+                raise ValueError("Values from `pseudo_forecast_input` and `forecast_input` must be different.")
+
+        # 5. Dimension checks
+        if not has_embedding:
+            if pfi and len(pfi) != len(di):
+                raise ValueError(
+                    "`dynamic_input` and `pseudo_forecast_input` have different dimensions. "
+                    "This is supported only if `dynamic_embedding` is specified."
+                )
+
+            if fi and len(fi) != len(di):
+                raise ValueError(
+                    "`dynamic_input` and `forecast_input` have different dimensions. "
+                    "This is supported only if `dynamic_embedding` is specified."
+                )
+
+        # In case we are using groups, we need to make sure the groups have a nan_probability associated to them.
+        nan_check = False
+        if isinstance(self.nan_probability, dict):
+            nan_check = True
+            nan_groups = list(self.nan_probability.keys())
+
+        # Join forecast signals into single variable. I also evaluate if the forecast signals should later be used on a
+        # single embedding network or not. We use a single embedding if we only have one forecast type (e.g., only
+        # pseudo-forecast) or if the two signals are identical.
+        if not fi:
+            self.forecast_signals = pfi
+            self.merge_forecast_signal = True
+        elif not pfi:
+            self.forecast_signals = fi
+            self.merge_forecast_signal = True
+        elif isinstance(pfi, dict) and isinstance(fi, dict):
+            self.forecast_signals = {**pfi, **fi}
+            self.merge_forecast_signal = False
+            if nan_check and not set(self.forecast_signals).issubset(set(nan_groups)):
+                raise ValueError(
+                    "All groups contained in `forecast_input` and `pseudo_forecast_input` must be specified in"
+                    "the `nan_probability` dictionary"
+                )
+        elif isinstance(pfi, dict) and isinstance(fi, list):
+            self.forecast_signals = {**pfi, "forecast": fi}
+            self.merge_forecast_signal = False
+            if nan_check and not set(self.forecast_signals).issubset(set(nan_groups)):
+                raise ValueError(
+                    "All groups contained in `forecast_input` and `pseudo_forecast_input` must be specified in"
+                    "the `nan_probability` dictionary. Because `forecast_input` is a list, it should be assigned the"
+                    "key `forecast` in the `nan_probability` dictionary."
+                )
+        elif isinstance(fi, dict) and isinstance(pfi, list):
+            self.forecast_signals = {**fi, "pseudo_forecast": pfi}
+            self.merge_forecast_signal = False
+            if nan_check and not set(self.forecast_signals).issubset(set(nan_groups)):
+                raise ValueError(
+                    "All groups contained in `forecast_input` and `pseudo_forecast_input` must be specified in"
+                    "the `nan_probability` dictionary. Because `pseudo_forecast_input` is a list, it should be"
+                    " assigned the key `pseudo_forecast` in the `nan_probability` dictionary."
+                )
+        elif isinstance(pfi, list) and isinstance(fi, list):
+            if pfi == fi:
+                self.forecast_signals = pfi
+                self.merge_forecast_signal = True
+            else:
+                self.forecast_signals = {"pseudo_forecast": pfi, "forecast": fi}
+                self.merge_forecast_signal = False
+            if nan_check and not set(self.forecast_signals).issubset(set(nan_groups)):
+                raise ValueError(
+                    "All groups contained in `forecast_input` and `pseudo_forecast_input` must be specified in"
+                    "the `nan_probability` dictionary. Because `pseudo_forecast_input` and `forecast_input` are"
+                    " lists, they should be assigned the names `pseudo_forecast` and `forecast`, respectively, in the"
+                    "`nan_probability` dictionary."
+                )
+
+        # Check forecast configuration
+        if self.forecast_signals and self.seq_length_forecast == 0:
+            raise ValueError("Running models in forecast mode requires `seq_length_forecast > 0`")
+
+        # If pseudo_forecast_ar_input is specified, we need to add it as a group in the forecast signals, as it will be
+        # processed by a different embedding. If forecast_signals is a list, we need to convert it to a dictionary.
+        if pfi_ar:
+            if isinstance(self.forecast_signals, list):
+                self.extended_forecast_signals = {"fc": self.forecast_signals, "ar": pfi_ar}
+                if nan_check and not set(self.extended_forecast_signals).issubset(set(nan_groups)):
+                    raise ValueError(
+                        "You are using `pseudo_forecast_ar_input`, together with `pseudo_forecast_input` and/or"
+                        "`forecast_input` as lists. Please specify the keys `fc` (for `pseudo_forecast_input` and/or"
+                        "`forecast_input`) and `ar` (for `pseudo_forecast_ar_input`) in the `nan_probability`"
+                        "dictionary."
+                    )
+            else:
+                self.extended_forecast_signals = {**self.forecast_signals, "ar": pfi_ar}
+                if nan_check and not set(self.extended_forecast_signals).issubset(set(nan_groups)):
+                    raise ValueError(
+                        "You are using `pseudo_forecast_ar_input`, together with `pseudo_forecast_input` and/or"
+                        "`forecast_input`. Please specify the key `ar` (for `pseudo_forecast_ar_input`) in the"
+                        "`nan_probability` dictionary. Moreover, all groups contained in `forecast_input` and/or"
+                        "`pseudo_forecast_input` must be specified "
+                    )
+
+    def _check_metrics(self):
+        """Check for specific configurations required by certain metrics."""
+        from hy2dl.evaluation.registry import registry
+
+        is_forecast = False if self.forecast_signals == [] else True
+        is_probabilistic = self.distribution is not None
+        requested_metrics = registry.get_available(forecast_mode=is_forecast, probabilistic=is_probabilistic)
+
+        # Check validation metrics
+        for m_name in self.validation_metric:
+            if m_name.lower() == "all":
+                raise ValueError("Validation metric cannot be 'all'. Please specify the desired metrics explicitly.")
+
+            elif m_name.lower() not in requested_metrics:
+                raise ValueError(
+                    f"Metric '{m_name}' is not compatible with the current configuration."
+                    f"Available metrics for this configuration are: {requested_metrics}"
+                )
+
+        # Check testing metrics
+        available_metrics = requested_metrics + ["all"]
+        for m_name in self.testing_metrics:
+            if m_name.lower() not in available_metrics:
+                raise ValueError(
+                    f"Metric '{m_name}' is not compatible with the current configuration. "
+                    f"Available metrics for this configuration are: {available_metrics}"
+                )
 
     def _check_models(self):
         """Check for specific configurations required by certain models."""
-        # Check forecast configuration
-        if self.model == "forecast_lstm" and (self.seq_length_forecast == 0 or len(self.forecast_input) == 0):
-            raise ValueError("`forecast_lstm` requires `seq_length_forecast > 0` and `forecast_input` to be specified.")
         if self.model == "hybrid" and (self.conceptual_model is None or self.dynamic_input_conceptual_model is None):
             raise ValueError(
                 "`hybrid` model requires `conceptual_model` and `dynamic_input_conceptual_model` to be specified."
             )
         if self.model == "lstmmdn":
-            if self.distribution not in [dist.value for dist in Distribution]:
-                raise ValueError(f"`distribution`: {self.distribution} not supported.")
+            from hy2dl.utils import distribution_registry
+
+            if self.distribution not in distribution_registry:
+                raise ValueError(
+                    f"`distribution`: {self.distribution} not supported."
+                    f" available distributions: {distribution_registry.keys()}"
+                )
             if self.num_mixture_components is None:
                 raise ValueError("`lstmmdn` model requires `num_mixture_components` to be specified.")
 
-    def _check_nan_settings(self):
-        """Check settings when working with nan handling methods"""
+    def _check_nan_settings_hc(self):
+        """Check hindcast settings when working with nan handling methods"""
         if self.nan_handling_method is not None:
             if self.nan_handling_method not in ["masked_mean", "input_replacement"]:
                 raise ValueError(
@@ -132,14 +312,16 @@ class Config(object):
                     for v in self.dynamic_input.values():
                         if isinstance(v, dict):
                             input_groups.extend(k2 for k2 in v)
-                # Groups of forecast
-                if isinstance(self.forecast_input, dict):
-                    input_groups.extend(k for k in self.forecast_input)
+
+                # Groups in forecast signals
+                if getattr(self, "forecast_signals", None) is not None and isinstance(self.forecast_signals, dict):
+                    input_groups.extend(k for k in self.forecast_signals)
+                if getattr(self, "extended_forecast_signals", None) is not None:
+                    input_groups.extend(k for k in self.extended_forecast_signals)
 
                 if set(nan_groups) != set(input_groups):
                     raise ValueError(
-                        "All groups contained in `dynamic_input` and `forecast_input` "
-                        "must be specified in `nan_probability`"
+                        "All groups contained in `dynamic_input`, must be specified in the `nan_probability` dictionary"
                     )
 
     def _check_num_workers(self):
@@ -181,10 +363,36 @@ class Config(object):
         if not os.path.exists(self.path_save_folder / "model"):
             os.makedirs(self.path_save_folder / "model")
 
+    def _prepare_path(self, k: str) -> Optional[Path]:
+        """Prepare a path from the configuration, ensuring it is a Path object and is absolute.
+
+        Parameters
+        ----------
+        k : str
+            Key in the configuration dictionary corresponding to the path to be prepared.
+
+        Returns
+        -------
+        Optional[Path]
+            The absolute Path, or None if the path was not specified in the configuration.
+
+        """
+        # Get property
+        path = self._cfg.get(k)
+
+        if path is None:  # If path is None, return None
+            return None
+
+        # If path is not none, returns absolute path
+        path = Path(path)
+        return path if path.is_absolute() else (self.base_dir / path).resolve()
+
     def _read_yaml(self, yml_path_or_dict: str | dict) -> dict:
         """Read the configuration from a YAML file or a dictionary."""
         if isinstance(yml_path_or_dict, (Path, str)):
-            with open(yml_path_or_dict, "r") as file:
+            # Ensure absolute path
+            yml_path = (self.base_dir / yml_path_or_dict).resolve()
+            with open(yml_path, "r") as file:
                 return yaml.safe_load(file)
         elif isinstance(yml_path_or_dict, dict):
             return yml_path_or_dict
@@ -266,6 +474,10 @@ class Config(object):
     # From this point forward, we define properties to access the configuration values.
     # -----------------
     @property
+    def ar_teacher_forcing(self) -> bool:
+        return self._cfg.get("ar_teacher_forcing", True)
+
+    @property
     def batch_size_training(self) -> int:
         return self._cfg.get("batch_size_training")
 
@@ -278,6 +490,10 @@ class Config(object):
         return self._cfg.get("conceptual_model")
 
     @property
+    def custom_scaler(self) -> Optional[dict[str, dict[str, float]]]:
+        return self._cfg.get("custom_scaler")
+
+    @property
     def custom_seq_processing(self) -> Optional[dict[str, dict[str, int]]]:
         return self._cfg.get("custom_seq_processing")
 
@@ -288,6 +504,14 @@ class Config(object):
     @property
     def dataset(self) -> str:
         return self._cfg.get("dataset")
+
+    @property
+    def dataset_in_ram(self) -> bool:
+        return self._cfg.get("dataset_in_ram", True)
+
+    @dataset_in_ram.setter
+    def dataset_in_ram(self, value: bool):
+        self._cfg["dataset_in_ram"] = value
 
     @property
     def device(self) -> str:
@@ -341,6 +565,18 @@ class Config(object):
         return Config._as_default_list(self._cfg.get("forcings"))
 
     @property
+    def forecast_counter(self) -> Optional[bool]:
+        return self._cfg.get("forecast_counter", False)
+
+    @property
+    def forecast_dataset_in_ram(self) -> bool:
+        return self._cfg.get("forecast_dataset_in_ram", True)
+
+    @forecast_dataset_in_ram.setter
+    def forecast_dataset_in_ram(self, value: bool):
+        self._cfg["forecast_dataset_in_ram"] = value
+
+    @property
     def forecast_input(self) -> list[str] | dict[str, list[str]]:
         return self._cfg.get("forecast_input", [])
 
@@ -361,6 +597,10 @@ class Config(object):
         return self._cfg.get("learning_rate", 0.001)
 
     @property
+    def loss(self) -> str:
+        return self._cfg.get("loss", "nse_basin_averaged")
+
+    @property
     def max_updates_per_epoch(self) -> int:
         return self._cfg.get("max_updates_per_epoch")
 
@@ -376,6 +616,10 @@ class Config(object):
     def nan_probability(self) -> Optional[dict[str, dict[str, float]]]:
         return self._cfg.get("nan_probability")
 
+    @nan_probability.setter
+    def nan_probability(self, value: dict[str, dict[str, float]]):
+        self._cfg["nan_probability"] = value
+
     @property
     def nan_probabilistic_masking(self) -> bool:
         return self._cfg.get("nan_probabilistic_masking", False)
@@ -383,6 +627,16 @@ class Config(object):
     @nan_probabilistic_masking.setter
     def nan_probabilistic_masking(self, value: bool) -> None:
         self._cfg["nan_probabilistic_masking"] = value
+
+    @property
+    def noise_level(self) -> Optional[float]:
+        return self._cfg.get("noise_level")
+
+    @noise_level.setter
+    def noise_level(self, value: float) -> None:
+        if value is not None and value < 0:
+            raise ValueError("noise_level must be non-negative.")
+        self._cfg["noise_level"] = value
 
     @property
     def num_mixture_components(self) -> int:
@@ -396,34 +650,65 @@ class Config(object):
     def num_workers(self) -> int:
         return self._cfg.get("num_workers", 0)
 
-    @property
-    def path_data(self) -> Path:
-        path = self._cfg.get("path_data")
-        return Path(path) if path else None
+    @num_workers.setter
+    def num_workers(self, value: int):
+        if value < 0:
+            raise ValueError(f"num_workers must be non-negative, got {value}.")
+        elif value > 0 and os.cpu_count() < value:
+            raise RuntimeError(f"num_workers ({value}) must be less than number of cores ({os.cpu_count()}).")
+        self._cfg["num_workers"] = value
 
     @property
     def path_additional_features(self) -> Optional[Path]:
-        path = self._cfg.get("path_additional_features")
-        return Path(path) if path else None
-    
+        return self._prepare_path("path_additional_features")
+
+    @property
+    def path_data(self) -> Path:
+        return self._prepare_path("path_data")
+
+    @property
+    def path_dataset_testing(self) -> Optional[Path]:
+        return self._prepare_path("path_dataset_testing")
+
+    @path_dataset_testing.setter
+    def path_dataset_testing(self, value: str):
+        self._cfg["path_dataset_testing"] = value
+
+    @property
+    def path_dataset_training(self) -> Optional[Path]:
+        return self._prepare_path("path_dataset_training")
+
+    @path_dataset_training.setter
+    def path_dataset_training(self, value: str):
+        self._cfg["path_dataset_training"] = value
+
+    @property
+    def path_dataset_validation(self) -> Optional[Path]:
+        return self._prepare_path("path_dataset_validation")
+
+    @path_dataset_validation.setter
+    def path_dataset_validation(self, value: str):
+        self._cfg["path_dataset_validation"] = value
+
     @property
     def path_entities(self) -> Optional[Path]:
-        path = self._cfg.get("path_entities")
-        return Path(path) if path else None
+        return self._prepare_path("path_entities")
 
     @property
     def path_entities_testing(self) -> Optional[Path]:
-        path = self._cfg.get("path_entities_testing")
-        return Path(path) if path else self.path_entities
-    
+        if self._cfg.get("path_entities_testing"):
+            return self._prepare_path("path_entities_testing")
+        return self.path_entities  # default to path_entities if not specified
+
     @path_entities_testing.setter
     def path_entities_testing(self, value: str):
         self._cfg["path_entities_testing"] = value
 
     @property
     def path_entities_training(self) -> Optional[Path]:
-        path = self._cfg.get("path_entities_training")
-        return Path(path) if path else self.path_entities
+        if self._cfg.get("path_entities_training"):
+            return self._prepare_path("path_entities_training")
+        return self.path_entities  # default to path_entities if not specified
 
     @path_entities_training.setter
     def path_entities_training(self, value: str):
@@ -431,20 +716,62 @@ class Config(object):
 
     @property
     def path_entities_validation(self) -> Optional[Path]:
-        path = self._cfg.get("path_entities_validation")
-        return Path(path) if path else self.path_entities
-    
+        if self._cfg.get("path_entities_validation"):
+            return self._prepare_path("path_entities_validation")
+        return self.path_entities  # default to path_entities if not specified
+
     @path_entities_validation.setter
     def path_entities_validation(self, value: str):
         self._cfg["path_entities_validation"] = value
 
     @property
+    def path_forecast_dataset(self) -> Optional[Path]:
+        return self._prepare_path("path_forecast_dataset")
+
+    @property
     def path_save_folder(self) -> Path:
-        path = self._cfg.get("path_save_folder")
-        if path:
-            return Path(f"{path}/{self.experiment_name}_seed_{self.random_seed}")
+        # experiment suffix to ensure that different runs of the same experiment do not overwrite each other
+        suffix = f"{self.experiment_name}_seed_{self.random_seed}"
+
+        if self._cfg.get("path_save_folder"):
+            base = Path(self._cfg.get("path_save_folder"))
+            folder = base if base.is_absolute() else (self.base_dir / base)
         else:
-            return Path(f"../results/{self.experiment_name}_seed_{self.random_seed}")
+            folder = self.base_dir / "../results"
+
+        return (folder / suffix).resolve()
+
+    @property
+    def path_save_zarr(self) -> Optional[Path]:
+        return self._prepare_path("path_save_zarr")
+
+    @path_save_zarr.setter
+    def path_save_zarr(self, value: str):
+        self._cfg["path_save_zarr"] = value
+
+    @property
+    def path_valid_samples_testing(self) -> Optional[Path]:
+        return self._prepare_path("path_valid_samples_testing")
+
+    @path_valid_samples_testing.setter
+    def path_valid_samples_testing(self, value: str):
+        self._cfg["path_valid_samples_testing"] = value
+
+    @property
+    def path_valid_samples_training(self) -> Optional[Path]:
+        return self._prepare_path("path_valid_samples_training")
+
+    @path_valid_samples_training.setter
+    def path_valid_samples_training(self, value: str):
+        self._cfg["path_valid_samples_training"] = value
+
+    @property
+    def path_valid_samples_validation(self) -> Optional[Path]:
+        return self._prepare_path("path_valid_samples_validation")
+
+    @path_valid_samples_validation.setter
+    def path_valid_samples_validation(self, value: str):
+        self._cfg["path_valid_samples_validation"] = value
 
     @property
     def predict_last_n(self) -> int:
@@ -455,12 +782,28 @@ class Config(object):
         self._cfg["predict_last_n"] = value
 
     @property
+    def pseudo_forecast_ar_input(self) -> list[str]:
+        return Config._as_default_list(self._cfg.get("pseudo_forecast_ar_input"))
+
+    @property
+    def pseudo_forecast_input(self) -> list[str] | dict[str, list[str]]:
+        return self._cfg.get("pseudo_forecast_input", [])
+
+    @property
     def optimizer(self) -> str:
         return self._cfg.get("optimizer", "adam")
 
     @property
     def output_features(self) -> int:
-        return self._cfg.get("output_features", 1)
+        return self._cfg.get("output_features", len(self.target))
+
+    @property
+    def ram_safety_factor(self) -> float:
+        return self._cfg.get("ram_safety_factor", 1.5)
+
+    @ram_safety_factor.setter
+    def ram_safety_factor(self, value: float):
+        self._cfg["ram_safety_factor"] = value
 
     @property
     def random_seed(self) -> int:
@@ -514,8 +857,16 @@ class Config(object):
         return Config._as_default_list(self._cfg.get("target"))
 
     @property
+    def target_weights(self) -> list[float]:
+        return self._cfg.get("target_weights")
+
+    @property
     def teacher_forcing_scheduler(self) -> Optional[dict[str, float]]:
         return self._cfg.get("teacher_forcing_scheduler")
+
+    @property
+    def testing_metrics(self) -> list[str]:
+        return Config._as_default_list(self._cfg.get("testing_metrics", "all"))
 
     @property
     def testing_period(self) -> list[str]:
@@ -538,8 +889,8 @@ class Config(object):
         return self._cfg.get("validate_every", 1)
 
     @property
-    def validate_n_random_basins(self) -> int:
-        return self._cfg.get("validate_n_random_basins", 0)
+    def validation_metric(self) -> list[str]:
+        return Config._as_default_list(self._cfg.get("validation_metric", "nse"))
 
     @property
     def validation_period(self) -> list[str]:

@@ -1,13 +1,22 @@
-import pickle
+import datetime
+import time
 import warnings
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
+import dask
 import numpy as np
 import pandas as pd
+import psutil
 import torch
-from numpy.lib.stride_tricks import sliding_window_view
+import xarray as xr
+import xarray_tensorstore
+import yaml
+import zarr
+from dask.distributed import Client, LocalCluster, as_completed
 from torch.utils.data import Dataset
 from tqdm import tqdm
+from tqdm.dask import TqdmCallback
 
 from hy2dl.utils.config import Config
 
@@ -18,34 +27,22 @@ class BaseDataset(Dataset):
     This class is inherited by other subclasses (e.g. CAMELS_US, CAMELS_GB, ...) to read and process the data. The
     class contains all the common operations that need to be done, independently of which database is being used.
 
-    This class and some of its methods are based on Neural Hydrology [#]_ and adapted for our specific case.
-
     Parameters
     ----------
     cfg : Config
         Configuration file.
     time_period : {'training', 'validation', 'testing'}
         Defines the period for which the data will be loaded.
-    check_NaN : Optional[bool], default=True
-        Whether to check for NaN values while processing the data. This should typically be True during training,
-        and can be set to False during evaluation (validation/testing).
-    entity : Optional[str], default=None
-        ID of the entity (e.g., single catchment's ID) to be analyzed
-
-    References
-    ----------
-    .. [#] F. Kratzert, M. Gauch, G. Nearing and D. Klotz: NeuralHydrology -- A Python library for Deep Learning
-        research in hydrology. Journal of Open Source Software, 7, 4050, doi: 10.21105/joss.04050, 2022
+    gauge_id : Optional[str | list[str]], default=None
+        Id of gauge(s) to be loaded.
 
     """
 
-    # Function to initialize the data
     def __init__(
         self,
         cfg: Config,
         time_period: str,
-        check_NaN: Optional[bool] = True,
-        entities_ids: Optional[str | list[str]] = None,
+        gauge_id: Optional[str | list[str]] = None,
     ):
         # Store configuration file
         self.cfg = cfg
@@ -54,367 +51,568 @@ class BaseDataset(Dataset):
         allowed_periods = {"training", "validation", "testing"}
         if time_period not in allowed_periods:
             raise ValueError(f"`time_period` must be one of: {allowed_periods}, but got '{time_period}'.")
-
+        self.period = time_period
         self.time_period = getattr(self.cfg, f"{time_period}_period")
 
-        # Read entities_ids from variable
-        if entities_ids:
-            self.entities_ids = [entities_ids] if isinstance(entities_ids, str) else entities_ids
-        # Read entities_ids from configuration file
-        elif hasattr(self.cfg, f"path_entities_{time_period}"):
+        ## ------------------------------------------------------
+        ## Read gauge_id
+        ## ------------------------------------------------------
+        if gauge_id:  # from variable
+            self.gauge_id = [gauge_id] if isinstance(gauge_id, str) else gauge_id
+        elif hasattr(self.cfg, f"path_entities_{time_period}"):  # from configuration file
             path_entities = getattr(self.cfg, f"path_entities_{time_period}")
-            entities_ids = np.loadtxt(path_entities, dtype="str").tolist()
-            self.entities_ids = [entities_ids] if isinstance(entities_ids, str) else entities_ids
+            gauge_id = np.loadtxt(path_entities, dtype="str").tolist()
+            self.gauge_id = [gauge_id] if isinstance(gauge_id, str) else gauge_id
         else:
             raise ValueError(
-                f"No entities_ids found. Provide the `entities_ids` variable directly or define in the configuration"
+                f"No gauge_id found. Provide the `gauge_id` variable directly or define in the configuration"
                 f"file either `path_entities` or `path_entities_{time_period}`"
             )
 
-        # Dictionaries to store the information used by the model. The dictionaries are basin-indexed.
-        self.x_d = {}  # dynamic input going into the lstm
-        self.y_obs = {}  # target variable
-        if self.cfg.forecast_input:
-            self.x_fc = {}
-        if self.cfg.static_input:
-            self.x_s = {}  # static input (e.g. catchment attributes)
-        if self.cfg.dynamic_input_conceptual_model:
-            self.x_d_conceptual = {}  # conceptual input (case of hybrid models)
+        ## ------------------------------------------------------
+        ## Extract variables of interest for the different groups
+        ## ------------------------------------------------------
+        self.dynamic_input = BaseDataset.unique_values(x=self.cfg.dynamic_input)  # dynamic input
 
-        # Dictionary to store additional information
-        self.df_ts = {}  # processed dataframe for each basin.
-        self.scaler = {}  # information to standardize the data
-        self.basin_std = {}  # std of the target variable of each basin (can be used later in the loss function)
-
-        # List to store the valid entities (basin, time_index) that will be used for training.
-        self.valid_entities = []
-        basins_without_samples = []
-
-        # --------------------------------------------------------------------------
-        # Process static attributes
-        if self.cfg.static_input:
-            self.df_attributes = self._read_attributes()
-
-        # Process additional features that can be included as inputs
-        if self.cfg.path_additional_features:
-            self.additional_features = self._load_additional_features()
-
-        # Retrieve unique dynamic input names
-        self.unique_dynamic_input = BaseDataset.unique_values(x=self.cfg.dynamic_input)
-
-        # Model input for hindcast period (historical period)
-        self.hindcast_input = list(
-            dict.fromkeys(
-                self.unique_dynamic_input + BaseDataset.unique_values(x=self.cfg.dynamic_input_conceptual_model)
-            )
-        )
-
-        # Retrive unique forecast input names
-        self.unique_forecast_input = BaseDataset.unique_values(x=self.cfg.forecast_input)
-
-        # Concatenate and extract the unique variables per frequency if applicable. This is useful
-        # if we have different groups of variables for each frequency
+        # If applicable, extract variables per frequency. Useful if we have different groups per frequency
         if self.cfg.custom_seq_processing is not None and isinstance(self.cfg.dynamic_input, dict):
-            self.unique_input_per_freq = {
+            self.input_per_freq = {
                 k: BaseDataset.unique_values(self.cfg.dynamic_input[k]) for k in self.cfg.custom_seq_processing
             }
 
-        # This loop goes one by one through all the entities. For each entity it creates an entry in the different
-        # dictionaries. We define a progress bar if self.entitites_ids contains more than one entity.
-        iterator = (
-            tqdm(self.entities_ids, desc="Processing entities", unit="entity", ascii=True)
-            if len(self.entities_ids) > 1
-            else self.entities_ids
+        # input for hindcast period
+        self.hindcast_input = list(
+            dict.fromkeys(self.dynamic_input + BaseDataset.unique_values(x=self.cfg.dynamic_input_conceptual_model))
         )
-        for id in iterator:
-            # Load time series for specific catchment id
-            df_ts = self._read_data(catch_id=id)
 
-            additional_flag = []
-            if self.cfg.path_additional_features:
-                # Add additional features (optional)
-                df_ts = pd.concat([df_ts, self.additional_features[id]], axis=1)
-                # We can add a flag using additional features, that indicate which samples should be excluded from
-                # training. For this we need a date-indexed pandas DataFrame with a column named "ablation_flag",
-                # containing 0/1 flags (0 for exclusion).
-                if "ablation_flag" in df_ts.columns:
-                    additional_flag.append("ablation_flag")
+        # input for pseudo-forecast and/or forecast period
+        self.pseudo_forecast_input = BaseDataset.unique_values(x=self.cfg.pseudo_forecast_input)
+        self.pseudo_forecast_ar_input = BaseDataset.unique_values(x=self.cfg.pseudo_forecast_ar_input)
+        self.forecast_input = BaseDataset.unique_values(x=self.cfg.forecast_input)
 
-            # In case we need to add lagged features
-            if isinstance(self.cfg.lagged_features, dict):
-                df_ts = self._add_lagged_features(df=df_ts)
+        ### -----------------------------------------------
+        ### Read sample dataset to get metadata of interest
+        ### -----------------------------------------------
+        df_sample = self._read_data(gauge_id=gauge_id[0])
 
-            # Defines the start date considering the offset due to sequence length. We want that, if possible, the start
-            # date is the first date of prediction.
-            freq = pd.infer_freq(df_ts.index)
-            start_date = self._parse_datetime(date_str=self.time_period[0], freq=freq)
-            end_date = self._parse_datetime(date_str=self.time_period[1], freq=freq)
-            warmup_start_date = start_date - (
-                self.cfg.seq_length_hindcast + self.cfg.seq_length_forecast - self.cfg.predict_last_n
-            ) * pd.tseries.frequencies.to_offset(freq)
+        # Extract time metadata
+        self.data_freq = pd.infer_freq(df_sample.index)
+        self.data_step = pd.tseries.frequencies.to_offset(self.data_freq)
 
-            # Filter dataframe for the period and variables of interest
-            df_ts = df_ts.loc[
-                warmup_start_date:end_date,
-                list(
-                    dict.fromkeys(self.hindcast_input + self.unique_forecast_input + self.cfg.target + additional_flag)
-                ),
-            ]
+        self.start_date = self._parse_datetime(date_str=self.time_period[0], freq=self.data_freq)
+        self.end_date = self._parse_datetime(date_str=self.time_period[1], freq=self.data_freq)
+        self.warmup_start_date = (
+            self.start_date
+            - (self.cfg.seq_length_hindcast + self.cfg.seq_length_forecast - self.cfg.predict_last_n) * self.data_step
+        )
 
-            # Reindex the dataframe to assure continuos data between the start and end date of the time period. Missing
-            # data will be filled with NaN, so this will be taken care of later by the valid_samples function.
-            full_range = pd.date_range(start=warmup_start_date, end=end_date, freq=freq)
-            df_ts = df_ts.reindex(full_range)
+        # Check if we have ablation_flag as additional features, and if so, we add it to the variables of interest
+        additional_flag = []
+        if self.cfg.path_additional_features:
+            ds_af = xarray_tensorstore.open_zarr(self.cfg.path_additional_features)
+            if "ablation_flag" in ds_af.feature:
+                additional_flag.append("ablation_flag")
 
-            # Checks for invalid samples due to NaN or insufficient sequence length
-            flag = self._validate_samples(df_ts=df_ts, df_attributes=self.df_attributes.loc[id], check_NaN=check_NaN)
-            # Index of valid samples
-            valid_samples = np.where(flag)[0]
+        # Collect all variables of interest in one list
+        self.variables_of_interest = list(
+            dict.fromkeys(
+                self.hindcast_input
+                + self.pseudo_forecast_input
+                + self.pseudo_forecast_ar_input
+                + self.cfg.target
+                + additional_flag
+            )
+        )
 
-            # When working seq-seq, if we want non-overlapping blocks, we calculate their respective starting indices.
-            if self.cfg.unique_prediction_blocks:
-                block_id = np.arange(len(df_ts) // self.cfg.predict_last_n) * self.cfg.predict_last_n + (
-                    self.cfg.predict_last_n - 1
-                )
-                valid_samples = block_id[flag[block_id]]
-
-            # Create a list that contain the indexes (basin, time_index) of the valid samples
-            self.valid_entities.extend([(id, int(f)) for f in valid_samples])
-
-            # Store the processed information of the basin, in basin-indexed dictionaries.
-            if valid_samples.size > 0:
-                # Store processed dataframes
-                self.df_ts[id] = df_ts
-
-                # Store dynamic input as nested dictionary. First indexed by basin and then by variable name.
-                self.x_d[id] = {
-                    col: torch.tensor(df_ts[col].values, dtype=torch.float32) for col in self.unique_dynamic_input
-                }
-
-                # Store target data as dictionary indexed by basin.
-                self.y_obs[id] = torch.tensor(df_ts[self.cfg.target].values, dtype=torch.float32)
-
-                # Store forecast input as nested dictionary. First indexed by basin and then by variable name.
-                if self.cfg.forecast_input:
-                    self.x_fc[id] = {
-                        col: torch.tensor(df_ts[col].values, dtype=torch.float32) for col in self.unique_forecast_input
-                    }
-
-                # Store static input (e.g. catchment attributes) as dictionary indexed by basin.
-                if self.cfg.static_input:
-                    self.x_s[id] = torch.tensor(self.df_attributes.loc[id].values, dtype=torch.float32)
-
-                # Store conceptual input as nested dictionary. First indexed by basin and then by variable name
-                if self.cfg.dynamic_input_conceptual_model:
-                    self.x_d_conceptual[id] = {}
-                    for k, v in self.cfg.dynamic_input_conceptual_model.items():
-                        col = [v] if isinstance(v, str) else v
-                        self.x_d_conceptual[id][k] = torch.tensor(
-                            df_ts[col].mean(axis=1, skipna=True).values,
-                            dtype=torch.float32,
-                        )
-
-            else:  # Basins without valid samples
-                basins_without_samples.append(id)
-
-        # Print information of basins without valid samples
-        if len(basins_without_samples) > 0:
-            cfg.logger.info(f"Basins without valid samples in period of interest: {basins_without_samples}")
+        # Initialized variables
+        self.dataset_in_ram = False
+        self.fc_in_ram = False
+        self.basin_std = None
 
     def __len__(self):
-        return len(self.valid_entities)
+        return self.valid_samples.shape[0]
 
-    def __getitem__(self, id) -> dict[str, torch.Tensor | np.ndarray | dict[str, torch.Tensor]]:
-        """Function used to construct the elements of the batches"""
-        basin, i = self.valid_entities[id]
-        sample = {}
-        # --------------------------
-        # Input in hindcast period
-        # --------------------------
-        # If we do not have custom processing (process the whole sequence length the same way)
-        if self.cfg.custom_seq_processing is None:
-            # Dynamic input
-            sample["x_d"] = {k: v[i - self.cfg.seq_length_hindcast + 1 : i + 1] for k, v in self.x_d[basin].items()}
+    def __getitem__(self, idx: int | list[int]):
+        """Extract a sample from dataset.
 
-        # If we have custom processing along the hindcast sequence length (e.g. multiple temporal frequencies)
+        This function is NOT called by Dataloader to contruct the batches, instead we use __getitems__.
+
+        Parameters
+        ----------
+        idx: int or list[int]
+            Index(es) of the data-sample to extract. The index refers to the position in the `self.valid_samples` table,
+            which contains the (gauge_id, date, source) combination(s), that can be used for training/evaluation.
+
+        """
+        if isinstance(idx, int):
+            indices = [idx]
+        elif isinstance(idx, list):
+            indices = idx
         else:
-            current_index = 0  # index to keep track of the current position in the x_d tensor
-            # Iterate through each part of the custom processing
-            for subset_name, subset_info in self.cfg.custom_seq_processing.items():
-                sample["x_d_" + subset_name] = {}
+            raise ValueError(f"Invalid index type: {type(idx)}. Expected int or list of ints.")
+        return self.__getitems__(indices)
 
-                # Retrieve the variables of interest for the current frequency
-                var_of_interest = (
-                    self.unique_input_per_freq[subset_name]
+    def __getitems__(self, indices: list[int]) -> dict[str, Any]:
+        """Construct a data-sample that will be send to the model
+
+        The function used vectorized logic to extract the required information to construct a data-sample. It supports
+        the case where the data is being loaded directly from RAM, of lazily from disk.
+
+        Parameters
+        ----------
+        idx: list[int]
+            Indexes of the data-sample to extract. The indexes refers to the positions in the `self.valid_samples`
+            table, which contains the (gauge_id, date, source) combinations, that can be used for training/evaluation.
+
+        Returns
+        -------
+        sample: dict[str, Any]
+            A dictionary containing the information that will be used to train the model. Elements of the dictionary
+            include:
+            - x_d: dict[str, torch.Tensor]
+                Dynamic inputs in hindcast period. Keys are the variable names and the values are tensors of shape
+                (B, L).In case of multiple frequencies, one dictionary per frequency is created.
+            - y_obs: torch.Tensor, shape (B, N, T)
+                Target variables.
+            - x_s: Optional[torch.Tensor], shape (B, NS)
+                Static inputs.
+            - x_d_fc: Optional[dict[str, torch.Tensor]]
+                Dynamic inputs in forecast period. Keys are the variable names and the values are tensors of shape
+                (B, LF).
+            - source_fc: Optional[np.ndarray], shape (B,)
+                String array to differentiate the source of forecast signals: pseudoforecast ("obs") or forecast ("fc").
+            - init_time_fc: Optional[np.ndarray], shape (B,)
+                Time where the forecast is emitted.
+            - persistent_q: Optional[torch.Tensor], shape (B, 1, T)
+                Target at the time the forecast is emitted.
+            - gauge_id: np.ndarray, shape (B,)
+                ID of the gauge for each element of the batch.
+            - date: np.ndarray, shape (B, L)
+                Dates associated with the target.
+            - std_basin: Optional[torch.Tensor], shape (B, T)
+                Standard deviation of target variables for the training period. Necessary if one uses basin-averaged NSE
+                as a loss function.
+
+        Notes
+        -----
+        Shape abbreviations used:
+        - B: batch size
+        - L: sequence length hindcast period.
+        - N: length of the target sequence, based on `predict_last_n` cofiguration argument
+        - LF: length of forecast period
+        - T: number of target variables
+        - NS: number of static inputs
+
+        """
+        # If we are loading data lazily from disk, we do the lazy loading directly pytorch´s workers.
+        if not self.dataset_in_ram and getattr(self, "ds_ts", None) is None:
+            self._load_dataset(engine="tensorstore")
+
+        if self.cfg.path_forecast_dataset is not None and not self.fc_in_ram and getattr(self, "ds_fc", None) is None:
+            self._load_forecast_dataset(engine="tensorstore")
+
+        sample = {}
+        # Valid samples
+        valid_sample = self.valid_samples[indices]
+        id, date, source = valid_sample["gauge_id"], valid_sample["date"], valid_sample["source"]
+        unique_sources = np.unique(source)
+
+        # Indexes of the valid samples
+        valid_idx_hc = self.valid_idx_hc[indices]
+        id_idx_hc, date_idx_hc = valid_idx_hc["gauge_idx"], valid_idx_hc["date_idx"]
+
+        valid_idx_fc = self.valid_idx_fc[indices]
+        id_idx_fc, date_idx_fc = valid_idx_fc["gauge_idx"], valid_idx_fc["date_idx"]
+
+        def _extract_xd_sequence(
+            var_list: list[str],
+            id_idx: np.ndarray,
+            start_t_indices: np.ndarray,
+            length: int,
+            freq_factor: Optional[int] = None,
+            as_dict: bool = True,
+        ) -> dict[str, torch.Tensor] | torch.Tensor:
+            """Helper function to extract a block (Batch, Sequence, Features) from dataset.
+
+            Parameters
+            ----------
+            var_list: list[str]
+                List of variable names to extract.
+            id_idx: np.ndarray
+                Indexes of the gauges to extract
+            start: np.ndarray
+                Starting index of each batch element
+            length: int
+                Length of the sequence.
+            freq_factor: Optional[int], default=None
+                If provided, the sequence wil averaged over the frequency factor
+            as_dict: bool, default=True
+                Whether to return the result as a dictionary (with variable names as keys) or as a tensor
+
+            Returns
+            -------
+            dict[str, torch.Tensor] or torch.Tensor
+                The extracted block, either as a dictionary or as a tensor
+                - dict: features names as keys, and values being the corresponding tensors of shape (B, L)
+                - tensor: a single tensor of shape (B, L, F)
+
+            """
+            var_indices = [self.feature_to_idx["obs"][var] for var in var_list]
+
+            if self.dataset_in_ram:
+                batch_gauge_idx = id_idx[:, None]
+                batch_time_idx = start_t_indices[:, None] + np.arange(length)
+                x_tensor = self.ds_ts[batch_gauge_idx, batch_time_idx][:, :, var_indices]
+            else:
+                batch_gauge_idx = xr.DataArray(id_idx, dims=["batch"])
+                batch_time_idx = xr.DataArray(start_t_indices[:, None] + np.arange(length), dims=["batch", "time"])
+                data_slice = (
+                    self.ds_ts["data"]
+                    .isel(gauge_id=batch_gauge_idx, date=batch_time_idx, feature=var_indices)
+                    .compute()
+                )
+                # standardize data
+                data_slice = (data_slice - self.scaler.sel(statistic="mean", feature=var_list).data) / self.scaler.sel(
+                    statistic="std", feature=var_list
+                ).data
+
+                x_tensor = torch.from_numpy(data_slice.data).float()  # convert to tensor
+
+            # Apply frequency reduction to the whole batch at once
+            if freq_factor is not None:
+                b, t, f = x_tensor.shape
+                x_tensor = x_tensor.reshape(b, t // freq_factor, freq_factor, f).mean(dim=2)
+
+            # Return as dictionary or tensor
+            return dict(zip(var_list, x_tensor.unbind(dim=2), strict=True)) if as_dict else x_tensor
+
+        def _extract_xfc_sequence(
+            var_list: list[str],
+            id_idx: np.ndarray,
+            start_t_indices: np.ndarray,
+        ) -> dict[str, torch.Tensor] | torch.Tensor:
+            """Helper function to extract a block (Batch, Sequence, Features) from forecast dataset.
+
+            Parameters
+            ----------
+            var_list: list[str]
+                List of variable names to extract.
+            id_idx: np.ndarray
+                Indexes of the gauges to extract
+            start: np.ndarray
+                Indexes (dates) of the forecasts to extract
+
+            Returns
+            -------
+            torch.Tensor
+                The extracted block (B, L, F)
+
+            """
+            var_indices = [self.feature_to_idx["fc"][var] for var in var_list]
+
+            if self.fc_in_ram:
+                x_tensor = self.ds_fc[id_idx, start_t_indices][:, :, var_indices]
+            else:
+                batch_gauge_idx = xr.DataArray(id_idx, dims=["batch"])
+                batch_time_idx = xr.DataArray(start_t_indices, dims=["batch"])
+
+                data_slice = (
+                    self.ds_fc["data"]
+                    .isel(
+                        gauge_id=batch_gauge_idx,
+                        date=batch_time_idx,
+                        feature=var_indices,
+                    )
+                    .compute()
+                )
+
+                data_slice = (
+                    data_slice - self.scaler_fc.sel(statistic="mean", feature=var_list).data
+                ) / self.scaler_fc.sel(statistic="std", feature=var_list).data
+
+                x_tensor = torch.from_numpy(data_slice.data).float()  # convert to tensor
+
+            return x_tensor
+
+        # --------------------------
+        # Hindcast period
+        # --------------------------
+        start_hindcasts = date_idx_hc - self.cfg.seq_length_hindcast + 1
+        if self.cfg.custom_seq_processing is None:  # single frequency
+            sample["x_d"] = _extract_xd_sequence(
+                var_list=self.dynamic_input,
+                id_idx=id_idx_hc,
+                start_t_indices=start_hindcasts,
+                length=self.cfg.seq_length_hindcast,
+            )
+        else:  # multi-frequency
+            current_index = 0
+            for subset_name, subset_info in self.cfg.custom_seq_processing.items():
+                subset_length = subset_info["n_steps"] * subset_info["freq_factor"]
+                subset_variables = (
+                    self.input_per_freq[subset_name]
                     if isinstance(self.cfg.dynamic_input, dict)
                     else self.cfg.dynamic_input
                 )
+                sample["x_d_" + subset_name] = _extract_xd_sequence(
+                    var_list=subset_variables,
+                    id_idx=id_idx_hc,
+                    start_t_indices=start_hindcasts + current_index,
+                    length=subset_length,
+                    freq_factor=subset_info["freq_factor"],
+                )
+                current_index += subset_length
 
-                # Iterate through each variable in the dynamic input
-                for k in var_of_interest:
-                    x_lstm = self.x_d[basin][k][i - self.cfg.seq_length_hindcast + 1 : i + 1]
-                    # Select timesteps of interest
-                    x_lstm = x_lstm[current_index : current_index + subset_info["n_steps"] * subset_info["freq_factor"]]
-                    # Process values using the frequency factor
-                    x_lstm = x_lstm.reshape(subset_info["n_steps"], subset_info["freq_factor"]).mean(dim=1)
-                    # Store processed sequence
-                    sample["x_d_" + subset_name][k] = x_lstm
+        # Hybrid model (input for conceptual part)
+        if self.cfg.conceptual_model is not None:
+            sample["x_d_conceptual"] = {}
+            for k, v in self.cfg.dynamic_input_conceptual_model.items():
+                var_list = [v] if isinstance(v, str) else v
 
-                # Update start position for next part of the sequence
-                current_index += subset_info["n_steps"] * subset_info["freq_factor"]
-        # --------------------------
-        # Input in forecast period
-        # --------------------------
-        if self.cfg.forecast_input:
-            sample["x_d_fc"] = {k: v[i + 1 : i + 1 + self.cfg.seq_length_forecast] for k, v in self.x_fc[basin].items()}
+                # Extract the sequence (this returns standardized data)
+                x_conceptual = _extract_xd_sequence(
+                    var_list=var_list,
+                    id_idx=id_idx_hc,
+                    start_t_indices=start_hindcasts,
+                    length=self.cfg.seq_length_hindcast,
+                    as_dict=False,
+                )
 
-            # Forecast metadata
-            sample["date_issue_fc"] = self.df_ts[basin].index[i].to_numpy()
-            sample["persistent_q"] = self.y_obs[basin][i, :]  # last available discharge (for metric calculation)
+                # Variables for conceptual model should be in the original scale, so we back-transform them
+                var_mean = (
+                    torch.from_numpy(self.scaler.sel(statistic="mean", feature=var_list)["data"].values)
+                    .float()
+                    .view(1, 1, -1)
+                )
+                var_std = (
+                    torch.from_numpy(self.scaler.sel(statistic="std", feature=var_list)["data"].values)
+                    .float()
+                    .view(1, 1, -1)
+                )
+
+                x_conceptual = (x_conceptual * var_std) + var_mean
+                sample["x_d_conceptual"][k] = torch.nanmean(x_conceptual, dim=2)
+
         # --------------------------
-        # Information about the static input
+        # Static input
         # --------------------------
         if self.cfg.static_input:
-            sample["x_s"] = self.x_s[basin]
-        # --------------------------
-        # Information about target variable
-        # --------------------------
-        sample["y_obs"] = self.y_obs[basin][
-            i + self.cfg.seq_length_forecast + 1 - self.cfg.predict_last_n : i + self.cfg.seq_length_forecast + 1,
-            :,
-        ]
-        # --------------------------
-        # Information about the conceptual (hybrid model)
-        # --------------------------
-        if self.cfg.dynamic_input_conceptual_model:
-            sample["x_d_conceptual"] = {
-                k: v[i - self.cfg.seq_length_hindcast + 1 : i + 1] for k, v in self.x_d_conceptual[basin].items()
-            }
+            sample["x_s"] = self.ds_attributes[id_idx_hc]
 
         # --------------------------
-        # Additional data
+        # Target
         # --------------------------
-        # use in the basin-averaged NSE loss function)
-        if self.basin_std:
-            sample["std_basin"] = self.basin_std[basin].repeat(sample["y_obs"].size(0)).unsqueeze(1)
-        # Information about the basin and the dates to which predictions will be made. This facilitates evaluating and
-        # ploting the results.
-        sample["basin"] = np.array(basin, dtype=np.str_)
-        sample["date"] = (
-            self.df_ts[basin]
-            .index[
-                i + self.cfg.seq_length_forecast + 1 - self.cfg.predict_last_n : i + self.cfg.seq_length_forecast + 1
-            ]
-            .to_numpy()
+        sample["y_obs"] = _extract_xd_sequence(
+            var_list=self.cfg.target,
+            id_idx=id_idx_hc,
+            start_t_indices=date_idx_hc + 1 + self.cfg.seq_length_forecast - self.cfg.predict_last_n,
+            length=self.cfg.predict_last_n,
+            as_dict=False,
         )
+
+        # --------------------------
+        # Forecast period
+        # --------------------------
+        if self.cfg.pseudo_forecast_input or self.cfg.forecast_input:
+            if self.cfg.merge_forecast_signal:  # If I need to combine the pseudo-forecast and forecast
+                shared_vars = self.pseudo_forecast_input if self.pseudo_forecast_input else self.forecast_input
+                x_tensor = torch.full(
+                    size=(len(id_idx_fc), self.cfg.seq_length_forecast, len(shared_vars)),
+                    fill_value=np.nan,
+                    dtype=torch.float32,
+                )
+                if "obs" in unique_sources:
+                    source_mask = source == "obs"
+                    x_tensor[source_mask, :, :] = _extract_xd_sequence(
+                        var_list=shared_vars,
+                        id_idx=id_idx_fc[source_mask],
+                        start_t_indices=date_idx_fc[source_mask] + 1,
+                        length=self.cfg.seq_length_forecast,
+                        as_dict=False,
+                    )
+
+                if "fc" in unique_sources:
+                    source_mask = source == "fc"
+                    x_tensor[source_mask, :, :] = _extract_xfc_sequence(
+                        var_list=shared_vars, id_idx=id_idx_fc[source_mask], start_t_indices=date_idx_fc[source_mask]
+                    )
+
+                sample["x_d_fc"] = dict(zip(shared_vars, x_tensor.unbind(dim=2), strict=True))
+
+            else:  # If I need to keep the pseudo-forecast and forecast as separate variables
+                sample["x_d_fc"] = {}
+                if "obs" in unique_sources:
+                    x_tensor = torch.full(
+                        size=(len(id_idx_fc), self.cfg.seq_length_forecast, len(self.pseudo_forecast_input)),
+                        fill_value=np.nan,
+                        dtype=torch.float32,
+                    )
+                    source_mask = source == "obs"
+                    x_tensor[source_mask, :, :] = _extract_xd_sequence(
+                        var_list=self.pseudo_forecast_input,
+                        id_idx=id_idx_fc[source_mask],
+                        start_t_indices=date_idx_fc[source_mask] + 1,
+                        length=self.cfg.seq_length_forecast,
+                        as_dict=False,
+                    )
+                    sample["x_d_fc"].update(dict(zip(self.pseudo_forecast_input, x_tensor.unbind(dim=2), strict=True)))
+
+                if "fc" in unique_sources:
+                    x_tensor = torch.full(
+                        size=(len(id_idx_fc), self.cfg.seq_length_forecast, len(self.forecast_input)),
+                        fill_value=np.nan,
+                        dtype=torch.float32,
+                    )
+                    source_mask = source == "fc"
+                    x_tensor[source_mask, :, :] = _extract_xfc_sequence(
+                        var_list=self.forecast_input,
+                        id_idx=id_idx_fc[source_mask],
+                        start_t_indices=date_idx_fc[source_mask],
+                    )
+                    sample["x_d_fc"].update(dict(zip(self.forecast_input, x_tensor.unbind(dim=2), strict=True)))
+
+            if self.pseudo_forecast_ar_input:  # Auto-regressive input (teacher-forcing) for pseudo-forecast period.
+                x_ar_fc = _extract_xd_sequence(
+                    var_list=self.pseudo_forecast_ar_input,
+                    id_idx=id_idx_hc,
+                    start_t_indices=date_idx_hc + 1,
+                    length=self.cfg.seq_length_forecast,
+                    as_dict=False,
+                )
+                x_ar_fc = self._add_noise_ar(x_ar_fc)
+
+                sample["x_d_fc"].update(dict(zip(self.pseudo_forecast_ar_input, x_ar_fc.unbind(dim=2), strict=True)))
+
+            # Additional forecast variables
+            sample["source_fc"] = source
+            sample["init_time_fc"] = date
+            sample["persistent_q"] = _extract_xd_sequence(
+                var_list=self.cfg.target, id_idx=id_idx_hc, start_t_indices=date_idx_hc, length=1, as_dict=False
+            )
+
+        # --------------------------
+        # Additional metadata
+        # --------------------------
+        sample["gauge_id"] = id
+        end_dates = date + np.timedelta64(self.cfg.seq_length_forecast, self.data_freq)
+        offsets = np.arange(-self.cfg.predict_last_n + 1, 1) * np.timedelta64(1, self.data_freq)
+        sample["date"] = end_dates[:, None] + offsets
+        if torch.is_tensor(self.basin_std):
+            sample["std_basin"] = self.basin_std[id_idx_hc]
 
         return sample
 
-    def calculate_basin_std(self):
-        """Fill the self.basin_std dictionary with the standard deviation of the target variables for each basin.
+    def setup_dataset(self, check_nan=True, path_scaler: Optional[Path | str] = None):
+        """Get data ready for training or evaluation.
 
-        This information is necessary if we use the basin-averaged NSE loss function during training [#]_.
+        This is the function you should call to load and process the dataset, and get it ready for use. It processes,
+        validates, maps, standardizes, and optimizes the dataset that will be sent to the model.
 
-        References
-        ----------
-        .. [#] Kratzert, F., Klotz, D., Shalev, G., Klambauer, G., Hochreiter, S., and Nearing, G.: "Towards learning
-            universal, regional, and local hydrological behaviors via machine learning applied to large-sample datasets"
-            Hydrology and Earth System Sciences*, 2019, 23, 5089-5110, doi:10.5194/hess-23-5089-2019
+        The setup follows these steps:
 
-        """
-        for k, v in self.y_obs.items():
-            self.basin_std[k] = torch.tensor(np.nanstd(v.numpy()), dtype=torch.float32)
+        1. Load Data: Either processes the dataset from scratch or loads an existing pre-processed one. Processing the
+           dataset is done in `_process_df` and includes:
 
-    def calculate_global_statistics(self, save_scaler: bool = False):
-        """Calculate statistics of data.
+           - reading the raw data
+           - selecting the time periods and variables of interest
+           - adding additional and lagged features (if specified)
+           - reindexing the data to have a continuous time index.
 
-        The function calculates the global mean and standard deviation of the dynamic inputs, target variables and
-        static attributes, and store them in a dictionary. It will be used later to standardize the data. This function
-        should ONLY be called in the training period.
+        2. Validate Samples: Look for valid samples or load a pre-computed list. Criteria for valid samples is defined
+           in `_valid_samples_mask`.
+
+        3. Map indexes: Map the valid samples to the corresponding indexes in the dataset. This is necessary for
+           efficient data loading during training.
+
+        4. Calculate statistics: Calculate data statistics that are used for standardization.
+
+        5. Finalize: runs `_finalize_setup()` to optimize memory and data access speed.
+
+        Note: Even if `cfg.dataset_in_ram = True`, disk-based datasets are kept lazy for sample validation, mapping,
+        and scaler calculation. If `cfg.dataset_in_ram = True` and enough RAM is available, the datasets will be moved
+        to RAM in `_finalize_setup()`.
 
         Parameters
         ----------
-        save_scalar : bool
-            If True, the scaler will be saved in a pickle file in the path defined by `path_save_results` in the config
-            file
+        check_nan : bool, default=True
+            Check for nan values during `validate_samples`.
+        path_scaler : Path or str, optional
+            Path to saved `scaler.yml` file.
 
         """
-        # Dynamic variables in hindcast period
-        x_d_mean = {}
-        x_d_std = {}
-        for k in self.unique_dynamic_input:
-            global_x = np.hstack([df[k].values for df in self.df_ts.values()])
-            x_d_mean[k] = torch.tensor(np.nanmean(global_x, axis=0), dtype=torch.float32)
-            x_d_std[k] = torch.tensor(np.nanstd(global_x, axis=0), dtype=torch.float32)
-            del global_x
-
-        self.scaler["x_d_mean"] = x_d_mean
-        self.scaler["x_d_std"] = self._check_std(x_d_std)
-
-        # Target variables
-        global_y = np.vstack([df[self.cfg.target].values for df in self.df_ts.values()])
-        self.scaler["y_mean"] = torch.tensor(np.nanmean(global_y, axis=0), dtype=torch.float32)
-        self.scaler["y_std"] = torch.tensor(np.nanstd(global_y, axis=0), dtype=torch.float32)
-        del global_y
-
-        # Dynamic variables in forecast period
-        if self.cfg.forecast_input:
-            x_fc_mean = {}
-            x_fc_std = {}
-            for k in self.unique_forecast_input:
-                global_x = np.hstack([df[k].values for df in self.df_ts.values()])
-                x_fc_mean[k] = torch.tensor(np.nanmean(global_x, axis=0), dtype=torch.float32)
-                x_fc_std[k] = torch.tensor(np.nanstd(global_x, axis=0), dtype=torch.float32)
-                del global_x
-
-            self.scaler["x_fc_mean"] = x_fc_mean
-            self.scaler["x_fc_std"] = self._check_std(x_fc_std)
-
-        # Static attributes
-        if self.cfg.static_input:
-            # Calculate mean
-            self.scaler["x_s_mean"] = torch.tensor(self.df_attributes.mean().values, dtype=torch.float32)
-            # Calculate std
-            x_s_std = dict(
-                zip(
-                    self.df_attributes.columns,
-                    torch.tensor(self.df_attributes.std().values, dtype=torch.float32),
-                    strict=True,
-                )
+        processing_time = time.time()
+        # Check if path to existing dataset was specified in config
+        _path_dataset = getattr(self.cfg, f"path_dataset_{self.period}", None)
+        # Check if we are in training mode
+        if not (self.period == "training") and not path_scaler:
+            raise ValueError(
+                "When dataset for validation or testing is being created, argument `path_scaler` should be provided"
             )
+        # --------------------------
+        # Create or load dataset of observed data
+        # --------------------------
+        # If the user specified a path to an existing dataset, we load it.
+        if _path_dataset is not None and _path_dataset.exists():
+            self.path_dataset = _path_dataset
+            self._load_dataset()
 
-            self.scaler["x_s_std"] = torch.tensor(list(self._check_std(x_s_std).values()), dtype=torch.float32)
+        else:  # We need to create the dataset
+            if self.cfg.dataset_in_ram:  # create the dataset directly in RAM
+                self._create_dataset(save_path=_path_dataset if _path_dataset is not None else None)
+                self.dataset_in_ram = True
 
-        if save_scaler:  # save the results in a pickle file
-            with open(self.cfg.path_save_folder / "scaler.pickle", "wb") as f:
-                pickle.dump(self.scaler, f)
+            else:  # Create it in disk as zarr file, without loading it into RAM.
+                self.path_dataset = (
+                    _path_dataset if _path_dataset is not None else self.cfg.path_data / f"dataset_{self.period}.zarr"
+                )
+                self._create_zarr_dataset()
+                self._load_dataset()
 
-    def standardize_data(self, standardize_output: bool = True):
-        """Standardize data, basin by basin.
+        # --------------------------
+        # static attributes
+        # --------------------------
+        self._process_attributes()
 
-        Parameters
-        ----------
-        standardize_output : bool
-            Boolean to define if the output should be standardize or not.
+        # --------------------------
+        # Forecast dataset
+        # --------------------------
+        if self.cfg.path_forecast_dataset is not None:
+            self._load_forecast_dataset()
+            self.fc_in_ram = False
 
-        """
-        for basin in self.x_d.keys():
-            # Dynamic input
-            for k, v in self.x_d[basin].items():
-                self.x_d[basin][k] = (v - self.scaler["x_d_mean"][k]) / self.scaler["x_d_std"][k]
+        # --------------------------
+        # Validate samples
+        # --------------------------
+        _path_valid_samples = getattr(self.cfg, f"path_valid_samples_{self.period}", None)
+        if _path_valid_samples is None:  # validate without saving them
+            self._validate_samples(check_nan=check_nan)
+        elif _path_valid_samples is not None and not _path_valid_samples.is_file():  # validate and save
+            self._validate_samples(check_nan=check_nan, save_path=_path_valid_samples)
+        else:  # load valid samples from existing file
+            self._load_valid_samples(path_valid_samples=_path_valid_samples)
 
-            # Forecast input
-            if self.cfg.forecast_input:
-                for k, v in self.x_fc[basin].items():
-                    self.x_fc[basin][k] = (v - self.scaler["x_fc_mean"][k]) / self.scaler["x_fc_std"][k]
+        # --------------------------
+        # Scalers
+        # --------------------------
+        if path_scaler is None:  # calculate scaler and save it
+            self._calculate_scaler()
+            self._load_scaler(path_scaler=self.cfg.path_save_folder / "scaler.yml")
+        else:  # load scaler from existing file
+            self._load_scaler(path_scaler=path_scaler)
 
-            # Static input
-            if self.cfg.static_input:
-                self.x_s[basin] = (self.x_s[basin] - self.scaler["x_s_mean"]) / self.scaler["x_s_std"]
+        # --------------------------
+        # Additional variables
+        # --------------------------
+        if self.period == "training" and self.cfg.loss == "nse_basin_averaged":
+            self._calculate_basin_std()
 
-            # Output
-            if standardize_output:
-                self.y_obs[basin] = (self.y_obs[basin] - self.scaler["y_mean"]) / self.scaler["y_std"]
+        # --------------------------
+        # Finalize dataset setup
+        # --------------------------
+        self._finalize_setup()
+        self.cfg.logger.info(
+            f"Time required to process the dataset: {datetime.timedelta(seconds=int(time.time() - processing_time))}"
+        )
 
     def _add_lagged_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add lagged input features to dataframe.
@@ -441,50 +639,577 @@ class BaseDataset(Dataset):
 
         return df
 
-    def _check_std(self, std: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """Check if the standard deviation is (almost) zero and adjust.
+    def _add_noise_ar(self, x: torch.Tensor) -> torch.Tensor:
+        """Add noise to ar_input in forecast period to avoid overfitting when using teacher forcing"""
 
-        The 1e-5 is a threshold to consider a std as zero (due to numerical issues).
+        # Sigmoid-like noise
+        steps = torch.arange(1, x.shape[1] + 1, dtype=x.dtype, device=x.device)
+        incremental_factor = (0.2 / (1 + torch.exp(-(steps - 6)))).view(1, -1, 1)
+        noise = torch.randn_like(x) * incremental_factor
+        return x + (x * noise)
+
+    def _calculate_basin_std(self):
+        """Calculate standard deviation of the target variables for each basin.
+
+        This information is necessary if we use the basin-averaged NSE loss function during training [#]_.
+
+        References
+        ----------
+        .. [#] Kratzert, F., Klotz, D., Shalev, G., Klambauer, G., Hochreiter, S., and Nearing, G.: "Towards learning
+            universal, regional, and local hydrological behaviors via machine learning applied to large-sample datasets"
+            Hydrology and Earth System Sciences*, 2019, 23, 5089-5110, doi:10.5194/hess-23-5089-2019
+
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            basin_std = self.ds_ts["data"].sel(feature=self.cfg.target).std(dim=["date"], skipna=True)
+            self.basin_std = torch.tensor(basin_std.values, dtype=torch.float32)
+            self.basin_std.share_memory_()
+
+    def _calculate_scaler(self):
+        """Calculate data statistics"""
+
+        ### ------------------
+        ### Dynamic variables
+        ### ------------------
+        # Calculate mean of variables using all the gauges that will be used for training (self.valid_gauges). In case
+        # we get a NaN value for the mean, we replace it with 0.0, to avoid affecting the standardization.
+        xd_mean = self.ds_ts.sel(gauge_id=self.valid_gauges).mean(dim=["gauge_id", "date"], skipna=True).fillna(0.0)
+        # Calculate standard deviation of variables using all the gauges that will be used for training
+        # (self.valid_gauges). In case we get a NaN or really small values, we replace it with 1.0, to avoid affecting
+        # the standardization.
+        xd_std = self.ds_ts.sel(gauge_id=self.valid_gauges).std(dim=["gauge_id", "date"], skipna=True)
+        xd_std = xd_std.where((xd_std.notnull()) & (xd_std >= 1e-5), 1.0)
+        # Combine into one and computes the values
+        scaler_xd = xr.concat([xd_mean, xd_std], dim="statistic")
+        scaler_xd = scaler_xd.assign_coords(statistic=["mean", "std"])
+        scaler_xd = scaler_xd.compute()
+
+        ### ------------------
+        ### Forecast variables
+        ### ------------------
+        if self.cfg.forecast_input:
+            xfc_mean = (
+                self.ds_fc.sel(gauge_id=self.valid_gauges)
+                .mean(dim=["gauge_id", "date", "lead_time"], skipna=True)
+                .fillna(0.0)
+            )
+            xfc_std = self.ds_fc.sel(gauge_id=self.valid_gauges).std(dim=["gauge_id", "date", "lead_time"], skipna=True)
+            xfc_std = xfc_std.where((xfc_std.notnull()) & (xfc_std >= 1e-5), 1.0)
+            # Combine into one and computes the values
+            scaler_fc = xr.concat([xfc_mean, xfc_std], dim="statistic")
+            scaler_fc = scaler_fc.assign_coords(statistic=["mean", "std"])
+            scaler_fc = scaler_fc.compute()
+
+        ### ------------------
+        ### Static attributes
+        ### ------------------
+        if self.cfg.static_input:
+            xs_mean = self.ds_attributes.sel(gauge_id=self.valid_gauges).mean(dim=["gauge_id"], skipna=True).fillna(0.0)
+            xs_std = self.ds_attributes.sel(gauge_id=self.valid_gauges).std(dim=["gauge_id"], skipna=True)
+            xs_std = xs_std.where(xs_std.notnull() & (xs_std >= 1e-5), 1.0)
+            scaler_attributes = xr.concat([xs_mean, xs_std], dim="statistic")
+            scaler_attributes = scaler_attributes.assign_coords(statistic=["mean", "std"])
+
+        # Group different scalers together in one dictionary
+        scaler = {
+            "xd_mean": scaler_xd.sel(statistic="mean").to_pandas()["data"].to_dict(),
+            "xd_std": scaler_xd.sel(statistic="std").to_pandas()["data"].to_dict(),
+        }
+        if self.cfg.forecast_input:
+            scaler.update(
+                {
+                    "xfc_mean": scaler_fc.sel(statistic="mean").to_pandas()["data"].to_dict(),
+                    "xfc_std": scaler_fc.sel(statistic="std").to_pandas()["data"].to_dict(),
+                }
+            )
+        if self.cfg.static_input:  # Update scaler dictionary with static attributes if applicable
+            scaler.update(
+                {
+                    "xs_mean": scaler_attributes.sel(statistic="mean").to_pandas()["data"].to_dict(),
+                    "xs_std": scaler_attributes.sel(statistic="std").to_pandas()["data"].to_dict(),
+                }
+            )
+
+        # Overwrite calculated scalers in case a custom scaler was provided
+        if self.cfg.custom_scaler is not None:  # custom_scaler: {'var_name': {'mean': #, 'std': #}}
+            for group_key, variables in scaler.items():
+                stat_type = group_key.split("_")[-1]
+                for var_name in variables.keys():
+                    if var_name in self.cfg.custom_scaler and stat_type in self.cfg.custom_scaler[var_name]:
+                        # Override the calculated value with the custom value
+                        scaler[group_key][var_name] = self.cfg.custom_scaler[var_name][stat_type]
+
+        # Save scaler to file
+        with open(self.cfg.path_save_folder / "scaler.yml", "w") as file:
+            yaml.dump(scaler, file, default_flow_style=False, sort_keys=False)
+
+    def _check_dataset(self, ds: xr.Dataset):
+        """Check if the dataset has the information requested in the configuration file.
 
         Parameters
         ----------
-        std : dict[str, torch.Tensor]
-            Dictionary with the standard deviation of the variables
+        ds : xr.Dataset
+            Lazy view of the dataset
+
+        Raises
+        ------
+        ValueError
+            If the dataset is missing information
+
+        """
+        # Check if all gauge_id are present in the dataset
+        if not np.isin(self.gauge_id, ds["gauge_id"].values).all():
+            missing_ids = np.setdiff1d(self.gauge_id, ds["gauge_id"].values)
+            raise ValueError(
+                f"The following gauge_id are not present in the dataset: {', '.join(missing_ids)}\n"
+                f"Please remove them from gauge_id or include the information in the dataset."
+            )
+
+        # Check if all variables of interest are present in the dataset
+        if not np.isin(self.variables_of_interest, ds["feature"].values).all():
+            missing_ids = np.setdiff1d(self.variables_of_interest, ds["feature"].values)
+            raise ValueError(
+                f"The following variables are not present in the dataset: {', '.join(missing_ids)}\n"
+                f"Please remove them from variables_of_interest or include the information in the dataset."
+            )
+
+        # Check if all dates exist in ds_date
+        date_range = pd.date_range(start=self.warmup_start_date, end=self.end_date, freq=self.data_freq)
+        if not np.isin(date_range, ds["date"].values).all():
+            missing = np.setdiff1d(date_range, ds["date"].values)
+            raise ValueError(
+                f"Dataset is missing {len(missing)} required dates.\n"
+                f"Required dates span from {date_range[0]} to {date_range[-1]} with frequency {self.data_freq}.\n"
+                f"Dataset dates span from {ds['date'].values[0]} to {ds['date'].values[-1]}"
+            )
+
+    def _check_ram(self, required_ram: float) -> bool:
+        """Check if there is enough RAM available to load the dataset into memory.
+
+        Parameters
+        ----------
+        required_ram : float
+            Estimated size of the dataset in bytes.
 
         Returns
         -------
-        dict[str, torch.Tensor]
-            Dictionary with the adjusted standard deviation
+        bool
+            True if there is enough RAM available, False otherwise.
 
         """
-        # Check if the std is (almost) zero and adjust. The 1e-5 is a threshold to consider a std as zero (due to
-        # numerical issues).
-        for k, v in std.items():
-            if v <= 1e-5 or torch.isnan(v):
-                std[k] = torch.tensor(1.0, dtype=torch.float32)
-                warnings.warn(
-                    f"The standard deviation of {k} is NaN or zero. "
-                    f"The std has been forced to 1 to avoid NaN issues during normalization.",
-                    stacklevel=2,
+        available_ram = psutil.virtual_memory().available
+        if available_ram >= required_ram * self.cfg.ram_safety_factor:
+            return True
+        else:
+            self.cfg.logger.warning(
+                f"Not enough RAM available to load the dataset into memory. Available RAM: {available_ram / 1e9:.2f}"
+                f"GB, Required RAM: {(required_ram * self.cfg.ram_safety_factor) / 1e9:.2f} GB (considering safety"
+                f"factor of {self.cfg.ram_safety_factor})."
+            )
+            return False
+
+    def _create_dataset(self, save_path: Path = None):
+        """Creates the dataset and keeps it in memory.
+
+        The function reads and process the data, for each entity (e.g., catchment), and store the results as an
+        in-memory `xarray.Dataset` (`self.ds_ts`) with the following structure:
+
+        - Dimensions / Coordinates:
+            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
+            - date: Time dimension.
+            - feature: Variables of interest
+        - Data Variables:
+            - data (gauge_id, date, feature): The primary data values stored as a float array.
+
+        Note: Because this function builds the entire dataset in RAM, you must have enough memory to hold the processed
+        data.
+
+        Parameters
+        ----------
+        save_path: Path, optional
+            If provided, the dataset will be saved to this path in zarr format.
+
+        """
+        self.cfg.logger.info(f"Creating {self.period} dataset in memory...")
+
+        # Get metadata (dates and features) from a sample to pre-allocate memory
+        dates = pd.date_range(start=self.warmup_start_date, end=self.end_date, freq=self.data_freq)
+        features = self.variables_of_interest
+
+        # Pre-allocate a 3D numpy array: (ids, dates, features)
+        data_array = np.zeros((len(self.gauge_id), len(dates), len(features)), dtype="float32")
+
+        # Process each entity using dask
+        with (
+            LocalCluster(n_workers=max(self.cfg.num_workers, 1), threads_per_worker=1) as cluster,
+            Client(cluster) as client,
+        ):
+            futures = client.map(self._process_df, self.gauge_id, extract_values=True)
+            # Create a mapping to place arrays in correct order
+            future_to_idx = {future: idx for idx, future in enumerate(futures)}
+            # Monitor progress
+            for future in tqdm(
+                as_completed(futures), total=len(futures), desc="Processing gauges", unit="entity", ascii=True
+            ):
+                idx = future_to_idx[future]
+                data_array[idx, :, :] = future.result()
+
+        # Construct xarray Dataset
+        self.ds_ts = xr.Dataset(
+            coords={
+                "gauge_id": ("gauge_id", np.array(self.gauge_id, dtype=object)),
+                "date": dates,
+                "feature": features,
+            },
+            data_vars={"data": (("gauge_id", "date", "feature"), data_array)},
+        )
+
+        self.ds_ts = self.ds_ts.chunk({"gauge_id": 1, "date": -1, "feature": -1})  # chunking helps speed up operations.
+        self.cfg.logger.info("Dataset created successfully.")
+
+        if save_path is not None:
+            self.ds_ts.to_zarr(save_path, mode="w", consolidated=True)
+            self.cfg.logger.info(f"Dataset saved at: {save_path}")
+
+    def _create_zarr_dataset(self):
+        """Creates the dataset and writes it directly to a zarr file on disk.
+
+        This function reads and processes the data for each entity (e.g., catchment) and stores the results,
+        sequentially, in a zarr structure with the following format:
+
+        - Dimensions / Coordinates:
+            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
+            - date: Time dimension.
+            - feature: Variables of interest
+        - Data Variables:
+            - data (gauge_id, date, feature): The primary data values stored as a float32 array.
+
+        Note: This function is designed to handle datasets larger than available RAM by writing the processed data
+        sequentially to disk.
+
+        """
+        self.cfg.logger.info("Creating zarr dataset...")
+        # Initialize zarr structure to store the processed results
+        self._initialize_zarr()
+
+        # Create array of entities' index (used later to write the data in the right position in the zarr)
+        zarr_ids = zarr.open(self.path_dataset, mode="r")["gauge_id"][:]
+        gauge_idx = [np.where(zarr_ids == id)[0][0] for id in self.gauge_id]
+
+        # Process each entity using dask
+        with (
+            LocalCluster(n_workers=max(self.cfg.num_workers, 1), threads_per_worker=1) as cluster,
+            Client(cluster) as client,
+        ):
+            futures = client.map(self._write_df_to_zarr, self.gauge_id, gauge_idx)  # Run function
+            # Monitor progress
+            for future in tqdm(
+                as_completed(futures), total=len(futures), desc="Processing gauges", unit="entity", ascii=True
+            ):
+                future.result()
+
+        zarr.consolidate_metadata(self.path_dataset)  # consolidate metadata to optimize read performance
+        self.cfg.logger.info(f"Dataset created successfully. Zarr file can be found at {self.path_dataset}")
+
+    def _finalize_setup(self):
+        """Prepares the dataset for PyTorch training by optimizing memory and data access.
+
+        This method is the final step in the setup process. It takes the prepared data and formats it specifically for
+        fast loading during model training.
+
+        1. RAM Loading: If the user requested to load the dataset in RAM and we have enough RAM, we load the dataset in
+        memory, standardize it, and transform it into share_memory() tensors to avoid memory crashes when PyTorch uses
+        multiple workers.
+        2. Lazy Loading: If the datasets will not be loaded into RAM, we remove their reference (set it to None),
+        because we will re-open their reference directly in the PyTorch workers using tensorstore engine, which speeds
+        up the reading of the information and avoid fork/spawn issues.
+
+        """
+        # If we still do not have the dataset in RAM is because we did a lazy loading of an existing dataset. If the
+        # user requested to load the dataset in RAM, we check if we have enough RAM to do it and if so, we load it.
+        # Otherwise, we remove the reference, to re-open it directly in pytorch´s workers using tensorstore.
+        if not self.dataset_in_ram:
+            if self.cfg.dataset_in_ram and self._check_ram(required_ram=self.ds_ts.nbytes):
+                self.ds_ts = self.ds_ts.compute()
+                self.dataset_in_ram = True
+            else:
+                self.ds_ts = None
+
+        # If we have a forecast dataset, we do the same for it.
+        if self.cfg.path_forecast_dataset is not None:
+            if self.cfg.forecast_dataset_in_ram and self._check_ram(required_ram=self.ds_fc.nbytes):
+                self.ds_fc = self.ds_fc.compute()
+                self.fc_in_ram = True
+            else:
+                self.ds_fc = None
+
+        # Standardize data
+        self._standardize_data()
+
+        # Converts xarray to shared memory tensors if the dataset is in RAM
+        if self.dataset_in_ram:
+            self.ds_ts = torch.from_numpy(self.ds_ts["data"].values).float()
+            self.ds_ts.share_memory_()
+
+        if self.fc_in_ram:
+            self.ds_fc = torch.from_numpy(self.ds_fc["data"].values).float()
+            self.ds_fc.share_memory_()
+
+        if self.cfg.static_input:
+            self.ds_attributes = torch.from_numpy(self.ds_attributes["data"].values).float()
+            self.ds_attributes.share_memory_()
+
+    def _initialize_zarr(self):
+        """Creates the zarr structure to store the data.
+
+        Zarr structure:
+        - Dimensions / Coordinates:
+            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
+            - date: Time dimension.
+            - feature: Variables of interest
+        - Data Variables:
+            - data (gauge_id, date, feature): The primary data values stored as a float array.
+
+        """
+        sample_df = self._process_df(gauge_id=self.gauge_id[0])
+        features = sample_df.columns.tolist()
+
+        # Create template to store the processed data
+        ds_template = xr.Dataset(
+            coords={
+                "gauge_id": ("gauge_id", np.array(self.gauge_id, dtype=object)),
+                "date": sample_df.index,
+                "feature": features,
+            },
+            data_vars={
+                "data": (
+                    ("gauge_id", "date", "feature"),
+                    np.zeros((len(self.gauge_id), len(sample_df), len(features)), dtype="float32"),
                 )
-        return std
+            },
+        )
 
-    def _load_additional_features(self) -> dict[str, pd.DataFrame]:
-        """Read pickle dictionary containing additional features.
+        # Chunk the dataset by id to optimize read/write operations
+        ds_template = ds_template.chunk({"gauge_id": 1, "date": -1, "feature": -1})
 
-        Returns
-        -------
-        additional_features : dict[str, pd.DataFrame]
-            Dictionary where each key is a basin and each value is a date-time indexed pandas DataFrame with the
-            additional features
+        # Save zarr template to disk (at this point the zarr file is empty, but with the right structure to store the
+        # processed data).
+        ds_template.to_zarr(self.path_dataset, compute=False, mode="w", consolidated=False)
+
+    def _load_dataset(self, engine: str = "xarray"):
+        """Loads an existing zarr dataset from disk.
+
+        This function opens a zarr dataset and filters it to include only the gauges, time periods, and variables of
+        interest specified in the configuration file. It also performs sanity checks to ensure all requested data is
+        present.
+
+        Expected format of zarr file:
+        - Dimensions / Coordinates:
+            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
+            - date: Time dimension.
+            - feature: Variables of interest
+        - Data Variables:
+            - data (gauge_id, date, feature): The primary data values stored as a float32 array.
+
+        Parameters
+        ----------
+        engine: str, default="xarray"
+            The engine to use for loading the zarr dataset.
 
         """
-        with open(self.cfg.path_additional_features, "rb") as file:
-            additional_features = pickle.load(file)
-        return additional_features
+        if engine == "tensorstore":  # used for batch construction
+            ds = xarray_tensorstore.open_zarr(self.path_dataset)
+        elif engine == "xarray":  # used for data processing and validation
+            self.cfg.logger.info("Loading dataset from zarr...")
+            ds = xr.open_zarr(self.path_dataset, consolidated=True)
+            self._check_dataset(ds=ds)
+        else:
+            raise ValueError(f"Unknown engine: {engine}. Use 'xarray' or 'tensorstore'")
+
+        # Filter dataset based on the information requested in the configuration file (in lazy mode)
+        self.ds_ts = ds.sel(
+            gauge_id=self.gauge_id,
+            date=slice(self.warmup_start_date, self.end_date),
+            feature=self.variables_of_interest,
+        )
+
+    def _load_forecast_dataset(self, engine: str = "xarray"):
+        """Load forecast dataset from zarr file.
+
+        This function opens a zarr dataset and filters it to include only the gauges, time periods, lead_times and
+        variables of interest, specified in the configuration file. I
+
+        Expected format of zarr file:
+        - Dimensions / Coordinates:
+            - gauge_id: Unique identifiers for the gauges (e.g., catchments).
+            - date: Time dimension.
+            - lead_time: Lead time dimension (e.g., forecast horizon).
+            - feature: Variables of interest
+        - Data Variables:
+            - data (gauge_id, date, lead_time, feature): The primary data values stored as a float32 array.
+
+        Parameters
+        ----------
+        engine: str, default="xarray"
+            The engine to use for loading the zarr dataset.
+
+        """
+        if engine == "tensorstore":  # used for batch construction
+            ds_fc = xarray_tensorstore.open_zarr(self.cfg.path_forecast_dataset)
+        elif engine == "xarray":  # used for data processing and validation
+            self.cfg.logger.info("Loading forecast dataset from zarr...")
+            ds_fc = xr.open_zarr(self.cfg.path_forecast_dataset, consolidated=True)
+        else:
+            raise ValueError(f"Unknown engine: {engine}. Use 'xarray' or 'tensorstore'")
+
+        self.ds_fc = ds_fc.sel(
+            gauge_id=self.gauge_id,
+            date=slice(self.warmup_start_date, self.end_date),
+            lead_time=slice(0, self.cfg.seq_length_forecast),
+            feature=self.forecast_input,
+        )
+
+    def _load_scaler(self, path_scaler: Path | str):
+        """Load precomputed scaler.
+
+        Parameters
+        ----------
+        path_scaler: Path | str
+            Path to the .yml file containing the scaler
+
+        """
+        # Load scaler
+        with open(path_scaler, "r") as file:
+            scaler = yaml.safe_load(file)
+
+        # ----------------------------------
+        # Re-build scaler for dynamic variables
+        # ----------------------------------
+        dyn_keys = list(scaler["xd_mean"].keys())
+        dyn_means = [scaler["xd_mean"][k] for k in dyn_keys]
+        dyn_stds = [scaler["xd_std"][k] for k in dyn_keys]
+
+        da = xr.DataArray(
+            np.stack([dyn_means, dyn_stds], axis=0),
+            coords={"statistic": ["mean", "std"], "feature": dyn_keys},
+            dims=("statistic", "feature"),
+        )
+        self.scaler = da.to_dataset(name="data")
+
+        # ----------------------------------
+        # Re-build scaler for forecast
+        # ----------------------------------
+        if self.cfg.forecast_input:
+            fc_keys = list(scaler["xfc_mean"].keys())
+            fc_means = [scaler["xfc_mean"][k] for k in fc_keys]
+            fc_stds = [scaler["xfc_std"][k] for k in fc_keys]
+
+            da = xr.DataArray(
+                np.stack([fc_means, fc_stds], axis=0),
+                coords={"statistic": ["mean", "std"], "feature": fc_keys},
+                dims=("statistic", "feature"),
+            )
+            self.scaler_fc = da.to_dataset(name="data")
+
+        # ----------------------------------
+        # Re-build scaler for static attributes
+        # ----------------------------------
+        if self.cfg.static_input:
+            xs_keys = list(scaler["xs_mean"].keys())
+            xs_means = [scaler["xs_mean"][k] for k in xs_keys]
+            xs_stds = [scaler["xs_std"][k] for k in xs_keys]
+
+            da = xr.DataArray(
+                np.stack([xs_means, xs_stds], axis=0),
+                coords={"statistic": ["mean", "std"], "feature": xs_keys},
+                dims=("statistic", "feature"),
+            )
+            self.scaler_attributes = da.to_dataset(name="data")
+
+    def _load_valid_samples(self, path_valid_samples: Path | str):
+        """Load precomputed valid-samples.
+
+        Parameters
+        ----------
+        path_valid_samples: Path | str
+            Path to the csv file containing the valid samples
+
+        """
+        self.cfg.logger.info("Loading valid samples from file...")
+        self.valid_samples = np.loadtxt(
+            path_valid_samples,
+            delimiter=",",
+            dtype=[("gauge_id", "O"), ("date", "datetime64[ns]"), ("source", "O")],
+            skiprows=1,  # header
+            encoding="utf-8",
+        )
+
+        # Sort valid samples by gauge_id and date
+        self.valid_samples = np.sort(self.valid_samples, order=["gauge_id", "date"])
+        self.valid_gauges = np.unique(self.valid_samples["gauge_id"])
+
+        # Map valid samples to their corresponding indexes in the zarr structure for faster access in getitem
+        self._map_indexes()
+
+    def _map_indexes(self):
+        """Map gauge_id, date and feature to their corresponding indexes
+
+        This function creates the mapping between gauge_id, date and features to their corresponding indexes in the
+        dataset. This is done to speed up the __getitems__ function. Depending on the source of the valid samples
+        (obs or forecast), the index-mapping is done to a different dataset.
+
+        """
+        self.cfg.logger.info("Mapping ids, dates and features to their corresponding indexes")
+
+        # Create structured array to store the valid indexes in the hindcast and the forecast period.
+        self.valid_idx_hc = np.zeros(len(self.valid_samples), dtype=[("gauge_idx", "i4"), ("date_idx", "i4")])
+        self.valid_idx_fc = np.zeros(len(self.valid_samples), dtype=[("gauge_idx", "i4"), ("date_idx", "i4")])
+        self.feature_to_idx = {}
+
+        # -------------------------
+        # Valid indices hindcast (always mapped to ds_ts)
+        # -------------------------
+        # Check all dates in valid_samples are contained in ds_ts. Important to avoid errors when mapping indexexs
+        if not np.isin(self.valid_samples["date"], self.ds_ts["date"].values).all():
+            raise ValueError("Some dates in valid_samples are missing from ds_ts.")
+        self.valid_idx_hc["date_idx"] = np.searchsorted(self.ds_ts["date"].values, self.valid_samples["date"])
+        id_to_idx = dict(zip(self.ds_ts["gauge_id"].values, range(self.ds_ts["gauge_id"].size), strict=True))
+        self.valid_idx_hc["gauge_idx"] = [id_to_idx[sample_id] for sample_id in self.valid_samples["gauge_id"]]
+
+        # -------------------------
+        # Valid indices forecat: Depending on the source (obs or forecast) the mapping is done to a different dataset.
+        # However even if the source is forecast, we still need to map to observed period for hindcast
+        # -------------------------
+        for source in np.unique(np.append(self.valid_samples["source"], "obs")):
+            # Extract the valid dates and gauge_ids for current source
+            source_mask = self.valid_samples["source"] == source
+            valid_date = self.valid_samples["date"][source_mask]
+            valid_gauge = self.valid_samples["gauge_id"][source_mask]
+
+            # Define target date and gauge_id based on the source
+            if source == "obs":
+                target_date = self.ds_ts["date"].values
+                target_gauge = self.ds_ts["gauge_id"].values
+                target_feature = self.ds_ts["feature"].values
+            elif source == "fc":
+                target_date = self.ds_fc["date"].values
+                target_gauge = self.ds_fc["gauge_id"].values
+                target_feature = self.ds_fc["feature"].values
+            else:
+                raise ValueError(f"Invalid source: {source}. Expected 'obs' or 'fc'.")
+
+            if not np.isin(valid_date, target_date).all():
+                raise ValueError(f"Some dates in valid_samples are missing from {source} dataset.")
+            self.valid_idx_fc["date_idx"][source_mask] = np.searchsorted(target_date, valid_date)
+            id_to_idx = dict(zip(target_gauge, range(len(target_gauge)), strict=True))
+            self.valid_idx_fc["gauge_idx"][source_mask] = [id_to_idx[sample_id] for sample_id in valid_gauge]
+
+            # Map features
+            self.feature_to_idx[source] = dict(zip(target_feature, range(len(target_feature)), strict=True))
 
     def _parse_datetime(self, date_str: str, freq: str) -> pd.Timestamp:
-        """Convert string date into pandas Timestamp object.
+        """Convert frequency string into pandas Timestamp object.
 
         Parameters
         ----------
@@ -504,6 +1229,56 @@ class BaseDataset(Dataset):
         elif freq == "h":
             return pd.to_datetime(date_str, format="%Y-%m-%d %H:%M:%S")
 
+    def _process_attributes(self):
+        """Read and process static attributes."""
+        if self.cfg.static_input:
+            ds_attributes = self._read_attributes().to_xarray()
+            self.ds_attributes = (
+                ds_attributes.reindex(gauge_id=self.ds_ts.gauge_id)
+                .to_array(dim="feature")
+                .transpose("gauge_id", "feature")
+                .to_dataset(name="data")
+            )
+
+    def _process_df(self, gauge_id: str, extract_values: bool = False) -> pd.DataFrame | np.ndarray:
+        """Read and process the data for a specific gauge_id (e.g., catchment).
+
+        Parameters
+        ----------
+        gauge_id : str
+            Id of the gauge to be processed.
+        extract_values: bool, default=False
+            Whether to return the processed data as a pandas DataFrame (False) or as a numpy array with only the values
+
+        Returns
+        -------
+        pd.DataFrame or np.ndarray
+            Processed data for the specific entity, either as a pandas DataFrame or as a numpy array.
+
+        """
+        # Load time series for specific catchment id
+        df_ts = self._read_data(gauge_id=gauge_id)
+
+        # Load additional features, if applicable, and concatenate them to the main dataframe
+        if self.cfg.path_additional_features:
+            ds_additional_features = xarray_tensorstore.open_zarr(self.cfg.path_additional_features)
+            df_additional_features = ds_additional_features.sel(gauge_id=gauge_id)["data"].to_pandas()
+            df_ts = pd.concat([df_ts, df_additional_features], axis=1)
+
+        # Add lagged features, if aplicable.
+        if isinstance(self.cfg.lagged_features, dict):
+            df_ts = self._add_lagged_features(df=df_ts)
+
+        # Filter dataframe for the period and variables of interest
+        df_ts = df_ts.loc[self.warmup_start_date : self.end_date, self.variables_of_interest]
+
+        # Reindex the dataframe to assure continuos data between the start and end date of the time period. Missing
+        # data will be filled with NaN, so this will be taken care of later.
+        full_range = pd.date_range(start=self.warmup_start_date, end=self.end_date, freq=self.data_freq)
+        df_ts = df_ts.reindex(full_range)
+
+        return df_ts if not extract_values else df_ts.values.astype("float32")
+
     def _read_attributes(self) -> pd.DataFrame:
         # This function is specific for each dataset
         raise NotImplementedError
@@ -512,236 +1287,416 @@ class BaseDataset(Dataset):
         # This function is specific for each dataset
         raise NotImplementedError
 
-    def _validate_samples(self, df_ts: pd.DataFrame, df_attributes: pd.DataFrame, check_NaN: bool) -> np.ndarray:
-        """Checks for invalid samples due to NaN or insufficient sequence length.
+    def _standardize_data(self):
+        """Standardize the data using the previously-computed scaler."""
+
+        # If observed dataset is in RAM, standardize it
+        if self.dataset_in_ram:
+            self.ds_ts = (self.ds_ts - self.scaler.sel(statistic="mean")) / self.scaler.sel(statistic="std")
+            self.cfg.logger.info("Dataset was successfully standardized.")
+        else:
+            self.cfg.logger.info(
+                "To keep lazy loading, the data will be standardized on the fly while constructing the batches."
+            )
+
+        # If forecast dataset exist and is in RAM, standardize it
+        if self.forecast_input:
+            if self.fc_in_ram:
+                self.ds_fc = (self.ds_fc - self.scaler_fc.sel(statistic="mean")) / self.scaler_fc.sel(statistic="std")
+                self.cfg.logger.info("Forecast dataset was successfully standardized.")
+            else:
+                self.cfg.logger.info(
+                    "To keep lazy loading, the forecast data will be standardized on the fly while constructing the "
+                    "batches."
+                )
+
+        # If we have static attributes, standardize them
+        if self.cfg.static_input:
+            self.ds_attributes = (
+                self.ds_attributes - self.scaler_attributes.sel(statistic="mean")
+            ) / self.scaler_attributes.sel(statistic="std")
+            self.cfg.logger.info("Static attributes were successfully standardized.")
+
+    def _validate_samples(self, check_nan: bool = True, save_path: Path = None):
+        """Function to construct the valid samples table.
 
         Parameters
         ----------
-        df_ts : pd.DataFrame
-            DataFrame with time series of inputs and targets;
-        df_attributes : pd.DataFrame
-            DataFrame of static attributes;
-        check_NaN : bool
-            Boolean to specify if Nan should be checked or not
+        check_nan : Optional[bool], default=True
+            Whether to check for NaN values while processing the data. This should typically be True during training,
+            and can be set to False during evaluation (validation/testing).
+        save_path: Optional[Path], default=None
+            If provided, the valid samples will be saved as a csv file in this path.
+
+        """
+        self.cfg.logger.info("Validating samples...")
+        # Construct the validity mask as a lazy Dask array. This will not execute the computations yet, but will build
+        # the graph of operations to compute the validity mask.
+        logic_valid_mask = self._valid_samples_mask(check_nan=check_nan)
+
+        # Compute validation mask
+        with TqdmCallback(desc="Validating samples", unit="tasks", tqdm_class=tqdm, ascii=True):
+            valid_mask = logic_valid_mask.compute()
+
+        # If the user requested to have unique prediction blocks (non-overlapping samples)
+        if self.cfg.unique_prediction_blocks:
+            # non-overlapping block indices
+            block_id = np.arange(valid_mask.sizes["date"] // self.cfg.predict_last_n) * self.cfg.predict_last_n + (
+                self.cfg.predict_last_n - 1
+            )
+            # non-overlapping mask
+            date_filter_np = np.zeros(valid_mask.sizes["date"], dtype=bool)
+            date_filter_np[block_id] = True
+            xr_date_filter = xr.DataArray(date_filter_np, dims=["date"], coords={"date": valid_mask.date})
+            # Apply mask
+            valid_mask = valid_mask & xr_date_filter
+
+        # Check for gauge_id with valid samples
+        self.valid_gauges = valid_mask.gauge_id[valid_mask.any(dim=["date", "source"])].values
+        self.cfg.logger.info(f"Number of gauges with valid samples: {len(self.valid_gauges)}")
+        invalid_gauges = valid_mask.gauge_id[~valid_mask.any(dim=["date", "source"])].values
+        if len(invalid_gauges) > 0:
+            self.cfg.logger.warning(f"Gauges without valid samples in period of interest: {', '.join(invalid_gauges)}")
+
+        # Extract valid samples (id, date, source) from the mask
+        gauge_indices, date_indices, source_indices = np.where(valid_mask.values)
+
+        # store valid samples in a structured array
+        self.valid_samples = np.empty(
+            len(gauge_indices), dtype=[("gauge_id", "O"), ("date", "datetime64[ns]"), ("source", "O")]
+        )
+        self.valid_samples["gauge_id"] = valid_mask.gauge_id.values[gauge_indices]
+        self.valid_samples["date"] = valid_mask.date.values[date_indices]
+        self.valid_samples["source"] = valid_mask.source.values[source_indices]
+        self.valid_samples = np.sort(self.valid_samples, order=["gauge_id", "date"])  # sort by gauge_id and date
+
+        self.cfg.logger.info(f"Number of valid samples: {self.valid_samples.size:_}".replace("_", " "))
+
+        # Map valid samples to their corresponding indexes in the zarr structure for faster access in getitem
+        self._map_indexes()
+
+        if save_path is not None:  # Save valid samples to csv if the user requested it
+            pd.DataFrame(self.valid_samples).to_csv(save_path, index=False)
+            self.cfg.logger.info(f"Valid samples saved at: {save_path}")
+
+    def _valid_samples_mask(self, check_nan: bool = True) -> xr.DataArray:
+        """Logic to check for valid samples.
+
+        Parameters
+        ----------
+        check_nan : Optional[bool], default=True
+            Whether to check for NaN values while processing the data. This should be True during training,
+            and can be set to False during evaluation (validation/testing).
 
         Returns
         -------
-        flag:np.ndarray
-            Array has a value of 1 for valid samples and a value of 0 for invalid samples.
+        is_valid: xr.DataArray
+            A boolean mask (gauge_id, date, source) where True indicates valid sample.
+            - gauge_id: id of gauge
+            - date: date
+            - source: "obs" for hindcast and pseudoforecast, "fc" for forecast (if applicable)
+
         """
-        # Initialize binary flags
-        flag = np.ones(len(df_ts), dtype=bool)
 
-        # Too early (not enough information)
-        flag &= np.arange(len(df_ts)) >= (self.cfg.seq_length_hindcast - 1)
+        def _check_vars(
+            var_list: list[str], window_size: int, shift_val: int = 0, any_nan: bool = True
+        ) -> xr.DataArray:
+            """Helper function to check a list of variables for NaNs over a window of a given size.
 
-        # Too late, not enough information to get a full forecast
-        last_forecast = len(df_ts) - self.cfg.seq_length_forecast
-        flag &= np.arange(len(df_ts)) < last_forecast
+            This function checks if there are any NaN values in the specified variables, over a rolling window of a
+            given size.
 
-        if check_NaN:
-            # -------------------------
-            # Check attributes: any NaN in the static features makes all the samples invalid
-            # -------------------------
-            if df_attributes is not None:
-                if df_attributes.isna().values.any():
-                    flag[:] = False
-                    return flag
+            Parameters
+            ----------
+            var_list: list[str]
+                List of variable names to check.
+            window_size: int
+                Size of the rolling window.
+            shift_val: int, default=0
+                Number of steps to shift the resulting mask.
+            any_nan: bool, default=True
+                True: the sample is invalid if ANY variable is NaN
+                False: the sample is invalid if ALL variables are NaN
 
-            # -------------------------
-            # Hindcast NaN check
-            # -------------------------
-            # Case 1: If we use the same variables along the sequence length, and only one group of variables,
-            # any NaN makes the sample invalid.
-            # Examples:
-            # - We have a single group of variables and we work with single frequency data
-            # - We have multi-frequency approaches but all frequencies use the same single group of variables.
-            if isinstance(self.cfg.dynamic_input, list):
-                # values of interest
-                x = df_ts[self.hindcast_input].values
-                x_slide_view = sliding_window_view(x, (self.cfg.seq_length_hindcast, x.shape[1]))
-                mask = ~np.any(np.isnan(x_slide_view), axis=(2, 3)).flatten()
-                flag[self.cfg.seq_length_hindcast - 1 :] &= mask
+            Returns
+            -------
+            valid_mask: xr.DataArray
+                A boolean mask (gauge_id, date) where True indicates valid sample
 
-            # Case 2: If we have multiple groups of variables, and use the same groups along the whole sequence.
-            # Example: We have multiple group of variables but have single frequency data.
-            # The sample is invalid if:
-            # - all the groups have NaN elements in the same point
-            # - a "mandatory group" have NaN elements. A mandatory group is a group that according to the
-            # ´nan_probability´ configuration argument have a nan_seq = 0
-            elif isinstance(self.cfg.dynamic_input, dict) and self.cfg.custom_seq_processing is None:
-                mask_groups = None
-                mask_mandatory_groups = None
-                # Check for each group
-                for group_name, group_var in self.cfg.dynamic_input.items():
-                    x = df_ts[group_var].values
-                    x_slide_view = sliding_window_view(x, (self.cfg.seq_length_hindcast, x.shape[1]))
-                    g_mask = ~np.any(np.isnan(x_slide_view), axis=(2, 3)).flatten()
+            """
+            # Select variables and convert to single DataArray
+            ds_subset = self.ds_ts["data"].sel(feature=var_list)
 
-                    # The mask is True if there is at least one valid group (logical OR -> |)
-                    mask_groups = g_mask if mask_groups is None else mask_groups | g_mask
+            # Check NaNs across variables
+            is_invalid = ds_subset.isnull().any(dim="feature") if any_nan else ds_subset.isnull().all(dim="feature")
 
-                    # Mandatory groups
-                    if self.cfg.nan_probability is not None and self.cfg.nan_probability[group_name]["nan_seq"] == 0:
-                        # The mask is True if all mandatory groups are True (logical AND -> &)
-                        mask_mandatory_groups = (
-                            g_mask if mask_mandatory_groups is None else mask_mandatory_groups & g_mask
-                        )
+            # Rolling count of NaNs
+            invalid_targets_in_window = is_invalid.rolling(
+                date=window_size, center=False, min_periods=window_size
+            ).sum()
 
-                # Final mask: least one group valid AND all mandatory groups valid
-                mask = mask_groups if mask_mandatory_groups is None else mask_groups & mask_mandatory_groups
-                flag[self.cfg.seq_length_hindcast - 1 :] &= mask
+            valid_mask = invalid_targets_in_window == 0 if any_nan else invalid_targets_in_window < window_size
 
-            # Case 3: If we use the different variables (or group of variables) along the sequence length.
-            # Example: We have multi-frequency approaches and the variables change along the sequence.
-            elif isinstance(self.cfg.dynamic_input, dict) and isinstance(self.cfg.custom_seq_processing, dict):
-                aux_index = 0  # start of sequence subset
-                for k, v in self.cfg.custom_seq_processing.items():
-                    # If we have single group of variables for each frequency
-                    if isinstance(self.cfg.dynamic_input[k], list):
-                        x = df_ts[self.cfg.dynamic_input[k]].values
-                        x_slide_view = sliding_window_view(x, (self.cfg.seq_length_hindcast, x.shape[1]))
-                        x_freq_subset = x_slide_view[:, :, aux_index : aux_index + (v["n_steps"] * v["freq_factor"])]
-                        mask = ~np.any(np.isnan(x_freq_subset), axis=(2, 3)).flatten()
+            # Shift if checking a sub-segment that ends displaced from the valid sample index (e.g., when we have
+            # multiple frequencies or pseudo-forecast input)
+            if shift_val != 0:
+                valid_mask = valid_mask.shift(date=shift_val, fill_value=False)
 
-                    # If we have multiple groups of variables for each frequency
-                    elif isinstance(self.cfg.dynamic_input[k], dict):
-                        mask_groups = None
-                        mask_mandatory_groups = None
-                        for group_name, group_var in self.cfg.dynamic_input[k].items():
-                            x = df_ts[group_var].values
-                            x_slide_view = sliding_window_view(x, (self.cfg.seq_length_hindcast, x.shape[1]))
-                            x_freq_subset = x_slide_view[
-                                :,
-                                :,
-                                aux_index : aux_index + (v["n_steps"] * v["freq_factor"]),
-                            ]
-                            g_mask = ~np.any(np.isnan(x_freq_subset), axis=(2, 3)).flatten()
+            return valid_mask
 
-                            # The mask is True if there is at least one valid group (logical OR -> |)
-                            mask_groups = g_mask if mask_groups is None else mask_groups | g_mask
+        def _check_forecast_vars(var_list: list[str]) -> xr.DataArray:
+            """Helper function to check a list of variables for NaNs over lead_time dimension"""
+            ds_subset = self.ds_fc["data"].sel(feature=var_list).isel(lead_time=slice(0, self.cfg.seq_length_forecast))
+            valid_mask = ds_subset.notnull().all(dim=["feature", "lead_time"])
+            return valid_mask
 
-                            # Mandatory groups
-                            if (
-                                self.cfg.nan_probability is not None
-                                and self.cfg.nan_probability[group_name]["nan_seq"] == 0
-                            ):
-                                # The mask is True if all mandatory groups are True (logical AND -> &)
-                                mask_mandatory_groups = (
-                                    g_mask if mask_mandatory_groups is None else mask_mandatory_groups & g_mask
-                                )
+        def _check_groups(
+            group_vars: dict[str, list[str]],
+            window_size: int = 1,
+            shift_val: int = 0,
+            source: str = "obs",
+            any_nan: bool = True,
+        ) -> xr.DataArray:
+            """Helper function to check group of variables.
 
-                        # Final mask: least one group valid AND all mandatory groups valid
-                        mask = mask_groups if mask_mandatory_groups is None else mask_groups & mask_mandatory_groups
+            The sample is invalid if:
+            - all the groups have NaN elements in the same point
+            - a "mandatory group" have NaN elements. A mandatory group is a group that according to the
+            'nan_probability' configuration argument have a nan_seq = 0
 
-                    flag[self.cfg.seq_length_hindcast - 1 :] &= mask
-                    aux_index += v["n_steps"] * v["freq_factor"]
+            Parameters
+            ----------
+            group_vars: dict[str, list[str]]
+                Dictionary where keys are group names and values are lists of variable names to check.
+            window_size: int, default=1
+                Size of the rolling window (e.g., sequence length).
+            shift_val: int, default=0
+                Number of steps to shift the resulting mask. This is useful when checking sub-segments that end before
+                the full sequence end.
+            source: str, default="obs"
+                Whether we are checking the groups for the hindcast/pseudoforecast ("obs") or for the forecast ("fc").
+            any_nan: bool, default=True
+                True: the sample is invalid if ANY variable are NaN
+                False: the sample is invalid if ALL variables are NaN
+            Returns
+            -------
+            mask: xr.DataArray
+                A boolean mask (gauge_id, date), for the whole group, where True indicates valid samples.
 
-            # -------------------------
-            # Target NaN check: all-NaN in the targets makes the sample invalid
-            # -------------------------
-            i_start = self.cfg.seq_length_hindcast + self.cfg.seq_length_forecast - self.cfg.predict_last_n
-            y = df_ts[self.cfg.target].values[i_start:]
-            y_slide_view = sliding_window_view(y, (self.cfg.predict_last_n, y.shape[1]))
-            mask = ~np.all(np.isnan(y_slide_view), axis=(2, 3)).flatten()
-            flag[self.cfg.seq_length_hindcast - 1 : last_forecast] &= mask
+            """
+            mask_groups = None
+            mask_mandatory_groups = None
 
-            # -------------------------
-            # Forecast NaN check: any-NaN in the x makes the sample invalid
-            # -------------------------
-            if self.cfg.forecast_input:
-                # Case 1: If have only one group of variables, any NaN makes the sample invalid.
-                if isinstance(self.cfg.forecast_input, list):
-                    x = df_ts[self.cfg.forecast_input].values[self.cfg.seq_length_hindcast :]
-                    x_slide_view = sliding_window_view(x, (self.cfg.seq_length_forecast, x.shape[1]))
-                    mask = ~np.any(np.isnan(x_slide_view), axis=(2, 3)).flatten()
+            for g_name, g_vars in group_vars.items():
+                if source == "obs":
+                    g_mask = _check_vars(var_list=g_vars, window_size=window_size, shift_val=shift_val, any_nan=any_nan)
+                elif source == "fc":
+                    g_mask = _check_forecast_vars(var_list=g_vars)
+                # The mask is True if there is at least one valid group (logical OR -> |)
+                mask_groups = g_mask if mask_groups is None else (mask_groups | g_mask)
+                # The mask is True if all mandatory groups are True (logical AND -> &)
+                if self.cfg.nan_probability and self.cfg.nan_probability[g_name]["nan_seq"] == 0:
+                    mask_mandatory_groups = (
+                        g_mask if mask_mandatory_groups is None else (mask_mandatory_groups & g_mask)
+                    )
 
-                # Case 2: If have multiple groups of variables, all the groups need to have NaN elements in
-                # the same point to make the sample invalid.
-                elif isinstance(self.cfg.forecast_input, dict):
-                    mask_groups = None
-                    mask_mandatory_groups = None
-                    for group_name, group_var in self.cfg.forecast_input.items():
-                        x = df_ts[group_var].values[self.cfg.seq_length_hindcast :]
-                        x_slide_view = sliding_window_view(x, (self.cfg.seq_length_forecast, x.shape[1]))
-                        g_mask = ~np.any(np.isnan(x_slide_view), axis=(2, 3)).flatten()
+            # Mask considering all groups: True if at least one group valid AND all mandatory groups valid
+            valid_mask = mask_groups if mask_mandatory_groups is None else (mask_groups & mask_mandatory_groups)
 
-                        # The mask is True if there is at least one valid group (logical OR -> |)
-                        mask_groups = g_mask if mask_groups is None else mask_groups | g_mask
+            return valid_mask
 
-                        # Mandatory groups
-                        if (
-                            self.cfg.nan_probability is not None
-                            and self.cfg.nan_probability[group_name]["nan_seq"] == 0
-                        ):
-                            # The mask is True if all mandatory groups are True (logical AND -> &)
-                            mask_mandatory_groups = (
-                                g_mask if mask_mandatory_groups is None else mask_mandatory_groups & g_mask
-                            )
+        # -------------------------
+        # Initialize mask
+        # -------------------------
+        is_valid = xr.full_like(self.ds_ts["data"].isel(feature=0), True, dtype=bool).drop_vars("feature")
 
-                    # Final mask: least one group valid AND all mandatory groups valid
-                    mask = mask_groups if mask_mandatory_groups is None else mask_groups & mask_mandatory_groups
+        # Too early (not enough history to form the sequence)
+        too_early = is_valid.shift(date=(self.cfg.seq_length_hindcast - 1), fill_value=False)
+        is_valid = is_valid & too_early
 
-                flag[self.cfg.seq_length_hindcast - 1 : last_forecast] &= mask
+        # Too late (not enough future to form a pseudo-forecast sequence)
+        if self.cfg.seq_length_forecast > 0:
+            too_late_mask = is_valid.shift(date=-self.cfg.seq_length_forecast, fill_value=False)
+            is_valid = is_valid & too_late_mask
 
-            # -------------------------
-            # Ablation_flag check: If I want to exclude certain points
-            # -------------------------
-            if "ablation_flag" in df_ts.columns:
-                ablation_flag = df_ts["ablation_flag"].values
-                flag &= (ablation_flag != 0) & (~np.isnan(ablation_flag))
+        # Ablation flag check
+        if "ablation_flag" in self.ds_ts.coords["feature"].values:
+            da_ablation = self.ds_ts["data"].sel(feature="ablation_flag")
+            ablation_mask = (da_ablation != 0) & da_ablation.notnull()
+            is_valid = is_valid & ablation_mask
 
-        return flag
+        # -------------------------
+        # Early exit if we don't want to check NaNs.
+        # -------------------------
+        if not check_nan:
+            if not self.pseudo_forecast_input and not self.forecast_input:
+                return is_valid.expand_dims(source=["obs"]).transpose(..., "source")
+            elif self.pseudo_forecast_input and not self.forecast_input:
+                return is_valid.expand_dims(source=["obs"]).transpose(..., "source")
+            elif not self.pseudo_forecast_input and self.forecast_input:
+                # Even if we are not checking for NaNs, we can only consider as valid the samples the dates that have
+                # forecast information.
+                mask = xr.DataArray(
+                    True, coords={"gauge_id": self.ds_fc.gauge_id, "date": self.ds_fc.date}, dims=["gauge_id", "date"]
+                )
+                mask = mask.reindex(date=is_valid.date, fill_value=False)
+                is_valid = is_valid & mask
+                return is_valid.expand_dims(source=["fc"]).transpose(..., "source")
+            else:
+                raise ValueError(
+                    "Having pseudo-forecast and forecast inputs is only supported for training,"
+                    "where check_nan should be set to True."
+                )
 
-    @staticmethod
-    def collate_fn(
-        samples: list[dict[str, torch.Tensor | np.ndarray | dict[str, torch.Tensor]]],
-    ) -> dict[str, torch.Tensor | np.ndarray | dict[str, torch.Tensor]]:
-        """Collate a list of samples into a single batch.
+        # -------------------------
+        # Check attributes: any NaN in the static features makes all the samples of that id invalid
+        # -------------------------
+        if self.cfg.static_input:
+            # Check if any attribute is NaN for each id, if attr is invalid, the whole time series for that id is False
+            attr_mask = self.ds_attributes["data"].notnull().all(dim="feature")
+            is_valid = is_valid & attr_mask
 
-        This function is used by the DataLoader to combine a list of individual samples
-        (as returned by `__getitem__`) into a batch. Each sample is a dictionary containing
-        tensors, NumPy arrays, or nested dictionaries of tensors.
+        # -------------------------
+        # Hindcast NaN check
+        # -------------------------
+        # Case 1: If we use the same variables along the sequence length, and only one group of variables, any NaN makes
+        # the sample invalid.
+        # Examples:
+        #   - Single group of variables and and single frequency
+        #   - Multi-frequency approaches but all frequencies use the same single group of variables.
+        #   - Hybrid models (currently only supported for single frequency, single group)
+        if isinstance(self.cfg.dynamic_input, list):
+            mask = _check_vars(var_list=self.hindcast_input, window_size=self.cfg.seq_length_hindcast)
+            is_valid = is_valid & mask
 
-        The function stacks or concatenates corresponding fields across the list of samples
-        so that each resulting field in the batch has a shape starting with (batch_size, ...).
+        # Case 2: If we have multiple groups of variables, and use the same groups along the whole sequence.
+        # Examples:
+        #   - We have multiple group of variables but have single frequency data.
+        elif isinstance(self.cfg.dynamic_input, dict) and self.cfg.custom_seq_processing is None:
+            mask = _check_groups(group_vars=self.cfg.dynamic_input, window_size=self.cfg.seq_length_hindcast)
+            is_valid = is_valid & mask
 
-        This function was taken from Neural Hydrology [#]_ and adapted for our specific case.
+        # Case 3: If we use the different variables (or group of variables) along the sequence length.
+        # Examples:
+        #   - We have multi-frequency approaches and the variables change along the sequence.
+        elif isinstance(self.cfg.dynamic_input, dict) and isinstance(self.cfg.custom_seq_processing, dict):
+            aux_index = 0  # start of sequence subset
+            seq_valid = None  # Initialize a mask that we will accumulate into
+
+            # Goes through each sub-segment defined in custom_seq_processing
+            for k, v in self.cfg.custom_seq_processing.items():
+                sub_seq_len = v["n_steps"] * v["freq_factor"]  # Length of sub-segment
+
+                # Calculate shift: The validity of the sub-segment should be assigned at the end of the full sequence.
+                shift_fwd = self.cfg.seq_length_hindcast - (aux_index + sub_seq_len)
+
+                # If we have single group of variables for each frequency
+                if isinstance(self.cfg.dynamic_input[k], list):
+                    vars_to_check = self.cfg.dynamic_input[k]
+                    seg_mask = _check_vars(var_list=vars_to_check, window_size=sub_seq_len, shift_val=shift_fwd)
+
+                # Sub-groups within the frequency block
+                elif isinstance(self.cfg.dynamic_input[k], dict):
+                    seg_mask = _check_groups(
+                        group_vars=self.cfg.dynamic_input[k], window_size=sub_seq_len, shift_val=shift_fwd
+                    )
+
+                # Accumulate: All segments must be valid (AND logic across time segments)
+                seq_valid = seg_mask if seq_valid is None else (seq_valid & seg_mask)
+
+                # Advance index
+                aux_index += sub_seq_len
+
+            is_valid = is_valid & seq_valid
+
+        # -------------------------
+        # Target NaN check: all-NaN in the targets makes the sample invalid
+        # -------------------------
+        target_mask = _check_vars(
+            var_list=self.cfg.target,
+            window_size=self.cfg.predict_last_n,
+            shift_val=-self.cfg.seq_length_forecast,
+            any_nan=False,
+        )
+        is_valid = is_valid & target_mask
+
+        # -------------------------
+        # Pseudo-forecat and forecast
+        # We need to check two potential cases, with different information source: pseudo-forecast and forecast. Both
+        # are treated independently, meaning both can generate valid_samples. However, we need to distinguish the
+        # sources so we can later look for the respective sample.
+        # -------------------------
+        source_masks = {}
+        if self.cfg.pseudo_forecast_input:  # pseudo-forecast
+            pfc_mask = is_valid.copy()
+            if isinstance(self.cfg.pseudo_forecast_input, list):
+                mask = _check_vars(
+                    var_list=self.cfg.pseudo_forecast_input,
+                    window_size=self.cfg.seq_length_forecast,
+                    shift_val=-self.cfg.seq_length_forecast,
+                )
+                pfc_mask = pfc_mask & mask
+
+            elif isinstance(self.cfg.pseudo_forecast_input, dict):
+                mask = _check_groups(
+                    group_vars=self.cfg.pseudo_forecast_input,
+                    window_size=self.cfg.seq_length_forecast,
+                    shift_val=-self.cfg.seq_length_forecast,
+                )
+                pfc_mask = pfc_mask & mask
+
+            source_masks["obs"] = pfc_mask.expand_dims(source=["obs"]).transpose(..., "source")
+
+        if self.cfg.forecast_input:  # forecast
+            fc_mask = is_valid.copy()
+            if isinstance(self.cfg.forecast_input, list):
+                mask = _check_forecast_vars(var_list=self.cfg.forecast_input)
+            elif isinstance(self.cfg.forecast_input, dict):
+                mask = _check_groups(group_vars=self.cfg.forecast_input, source="fc")
+
+            mask = mask.reindex(date=fc_mask.date, fill_value=False)
+            fc_mask = fc_mask & mask
+            source_masks["fc"] = fc_mask.expand_dims(source=["fc"]).transpose(..., "source")
+
+        # Combine masks if neccesary, otherwise returns single mask with default source "obs"
+        return (
+            xr.concat(list(source_masks.values()), dim="source")
+            if len(source_masks) > 0
+            else is_valid.expand_dims(source=["obs"]).transpose(..., "source")
+        )
+
+    def _write_df_to_zarr(self, gauge_id: str, gauge_idx: int):
+        """Process the data for a specific entity (e.g., catchment) and write it to the zarr file.
 
         Parameters
         ----------
-            samples (List[dict]): A list of sample dictionaries, each returned by `__getitem__`.
-                Each dictionary may contain:
-                    - tensors
-                    - numpy arrays
-                    - Nested dictionaries of tensors
+        gauge_id : str
+            Id of the gauge to be processed and stored in the zarr structure.
+        gauge_idx: int
+            Index of the gauge in the zarr structure (we use it to write the data in the right position in the zarr).
 
-        Returns:
-        ---------
-            dict: A single dictionary with the same structure as the input samples,
-                where values have been batched along the first dimension.
-
-        References
-        ----------
-        .. [#] F. Kratzert, M. Gauch, G. Nearing and D. Klotz: NeuralHydrology -- A Python library for Deep Learning
-            research in hydrology. Journal of Open Source Software, 7, 4050, doi: 10.21105/joss.04050, 2022
         """
-        batch = {}
-        if not samples:
-            return batch
-        features = list(samples[0].keys())
-        for feature in features:
-            if feature.startswith(("x_d")):
-                # Dynamic variables are stored as dictionaries with feature names as keys.
-                batch[feature] = {
-                    k: torch.stack([sample[feature][k] for sample in samples], dim=0)
-                    for k in samples[0][feature].keys()
-                }
-            elif feature.startswith(("basin", "date")):
-                batch[feature] = np.stack([sample[feature] for sample in samples], axis=0)
-            else:
-                # Everything else is a torch.Tensor
-                batch[feature] = torch.stack([sample[feature] for sample in samples], dim=0)
+        # Write the processed dataframe to the specific region of the existing zarr file
+        zarr_file = zarr.open(self.path_dataset, mode="r+")
+        zarr_file["data"][gauge_idx, :, :] = self._process_df(gauge_id=gauge_id, extract_values=True)
+
+    @staticmethod
+    def dask_worker_init_fn(worker_id):
+        """Initialization function for Dask workers.
+
+        Note: This function is called inside each PyTorch worker
+
+        """
+        dask.config.set(scheduler="synchronous")
+
+    @staticmethod
+    def collate_fn(batch):
+        """Custom collate function to construct batches
+
+        Because we are using getitems instead of getitem, we are already constructing the batch inside the getitems
+        function. Therefore, the collate function does not need any further processing.
+
+        """
         return batch
 
     @staticmethod

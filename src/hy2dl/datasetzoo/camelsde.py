@@ -1,4 +1,5 @@
 # import necessary packages
+from collections import defaultdict
 from typing import Optional
 
 import pandas as pd
@@ -21,11 +22,8 @@ class CAMELS_DE(BaseDataset):
         Configuration file.
     period : {'training', 'validation', 'testing'}
         Defines the period for which the data will be loaded.
-    check_NaN : Optional[bool], default=True
-        Whether to check for NaN values while processing the data. This should typically be True during training,
-        and can be set to False during evaluation (validation/testing).
-    entity : Optional[str], default=None
-        ID of the entity (e.g., single catchment's ID) to be analyzed
+    gauge_id : Optional[str | list[str]], default=None
+        Id of gauge(s) to be loaded.
 
     References
     ----------
@@ -44,16 +42,10 @@ class CAMELS_DE(BaseDataset):
         self,
         cfg: Config,
         time_period: str,
-        check_NaN: Optional[bool] = True,
-        entities_ids: Optional[str | list[str]] = None,
+        gauge_id: Optional[str | list[str]] = None,
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
-        super(CAMELS_DE, self).__init__(
-            cfg=cfg,
-            time_period=time_period,
-            check_NaN=check_NaN,
-            entities_ids=entities_ids,
-        )
+        super(CAMELS_DE, self).__init__(cfg=cfg, time_period=time_period, gauge_id=gauge_id)
 
     def _read_attributes(self) -> pd.DataFrame:
         """Read the catchments` attributes
@@ -77,22 +69,26 @@ class CAMELS_DE(BaseDataset):
         # Join all dataframes
         df_attributes = pd.concat(dfs, axis=1)
 
-        # Encode categorical attributes in case there are any
-        for column in df_attributes.columns:
-            if df_attributes[column].dtype not in ["float64", "int64"]:
-                df_attributes[column], _ = pd.factorize(df_attributes[column], sort=True)
+        # if possible, try to convert object columns to real numbers
+        for col in df_attributes.select_dtypes(include=["object"]).columns:
+            df_attributes[col] = pd.to_numeric(df_attributes[col], errors="coerce")
+
+        # encoding loop
+        categorical_cols = df_attributes.select_dtypes(exclude=["number"]).columns
+        for column in categorical_cols:
+            df_attributes[column], _ = pd.factorize(df_attributes[column], sort=True)
 
         # Filter attributes and basins of interest
-        df_attributes = df_attributes.loc[self.entities_ids, self.cfg.static_input]
+        df_attributes = df_attributes.loc[self.gauge_id, self.cfg.static_input]
 
         return df_attributes
 
-    def _read_data(self, catch_id: str) -> pd.DataFrame:
+    def _read_data(self, gauge_id: str) -> pd.DataFrame:
         """Read the catchments` timeseries
 
         Parameters
         ----------
-        catch_id : str
+        gauge_id : str
             identifier of the basin.
 
         Returns
@@ -101,7 +97,9 @@ class CAMELS_DE(BaseDataset):
             Dataframe with the catchments` timeseries
 
         """
-        path_timeseries = self.cfg.path_data / "timeseries" / f"CAMELS_DE_hydromet_timeseries_{catch_id}.csv"
+        path_timeseries = self.cfg.path_data / "timeseries" / f"CAMELS_DE_hydromet_timeseries_{gauge_id}.csv"
         # load time series
-        df = pd.read_csv(path_timeseries, index_col="date", parse_dates=["date"])
+        df = pd.read_csv(
+            path_timeseries, index_col="date", parse_dates=["date"], dtype=defaultdict(lambda: "float32", date=str)
+        )
         return df

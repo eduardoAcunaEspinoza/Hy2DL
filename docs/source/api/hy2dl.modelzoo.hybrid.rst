@@ -1,5 +1,5 @@
-Hybrid
-=======
+Hybrid model
+=============
 
 .. automodule:: hy2dl.modelzoo.hybrid
    :members:

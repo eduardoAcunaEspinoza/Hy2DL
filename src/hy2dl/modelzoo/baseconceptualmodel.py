@@ -68,10 +68,14 @@ class BaseConceptualModel(nn.Module):
 
             if self.parameter_type[parameter_name] == "static":
                 # If parameter is static, take the last value predicted by the lstm and copy it for all the timesteps.
-                warmup_lstm_out = lstm_out[:, -1:, index, :].expand(-1, warmup_period, -1)
-                simulation_lstm_out = lstm_out[:, -1:, index, :].expand(-1, lstm_out.shape[1] - warmup_period, -1)
+                warmup_lstm_out = lstm_out[:, :, index, :].mean(dim=1, keepdim=True).expand(-1, warmup_period, -1)
+                simulation_lstm_out = (
+                    lstm_out[:, :, index, :].mean(dim=1, keepdim=True).expand(-1, lstm_out.shape[1] - warmup_period, -1)
+                )
             elif self.parameter_type[parameter_name] == "dynamic":
-                warmup_lstm_out = lstm_out[:, warmup_period - 1 : warmup_period, index, :].expand(-1, warmup_period, -1)
+                warmup_lstm_out = (
+                    lstm_out[:, :warmup_period, index, :].mean(dim=1, keepdim=True).expand(-1, warmup_period, -1)
+                )
                 simulation_lstm_out = lstm_out[:, warmup_period:, index, :]
             else:
                 raise ValueError(f"Unsupported parameter type {self.parameter_type[parameter_name]}")

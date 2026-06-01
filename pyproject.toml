@@ -1,6 +1,6 @@
 [project]
 name = "Hy2DL"
-version = "1.0.1"
+version = "2.0.0"
 description = "Python library to create hydrological models for rainfall-runoff prediction using deep learning methods"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -10,14 +10,17 @@ authors = [
     {name = "Manuel Álvarez Chaves", email = "manuel.alvarez-chaves@simtech.uni-stuttgart.de"}
 ]
 
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.14"
 dependencies = [
+    "dask[complete]>=2026.1.0",
     "numpy>=2.2.0",
     "pandas>=2.2.0",
     "pyyaml>=6.0.2",
     "torch>=2.2.1",
     "tqdm>=4.67.1",
-    "xarray[io]>=2025.6.1",
+    "xarray-tensorstore>=0.3.0",
+    "xarray[io]>=2026.1.0",
+    "zarr>=2.18.0,<3.0.0",
 ]
 
 [dependency-groups]
@@ -33,10 +36,11 @@ lint = [
 
 dev = [
     "ipykernel>=6.30.1",
+    "ipywidgets>=8.1.8",
     "matplotlib>=3.8.3",
     "scipy>=1.13.1",
     {include-group = "docs"},
-    {include-group = "lint"}, 
+    {include-group = "lint"},
 ]
 
 [build-system]
