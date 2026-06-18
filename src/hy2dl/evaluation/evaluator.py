@@ -22,7 +22,7 @@ def _apply_forecast_metric(
     if filter_mask is not None:
         if set(filter_mask.dims) != {"gauge_id", "date", "feature"}:
             raise ValueError(
-                f"filter_mask must strictly have dimensions gauge_id, date, feature.Got: {set(filter_mask.dims)}"
+                f"filter_mask must strictly have dimensions gauge_id, date, feature. Got: {set(filter_mask.dims)}"
             )
         filter_mask = filter_mask.reindex(date=ds.date, gauge_id=ds.gauge_id, fill_value=False)
 
@@ -58,7 +58,7 @@ def _apply_forecast_metric(
                 selected_args.update({k: v for k, v in args_pool.items() if k not in selected_args})
 
         # find notnull mask across all arguments
-        mask = filter_mask.shift(date=-int(lt)) if filter_mask is not None else True
+        mask = filter_mask.shift(date=-int(lt), fill_value=False) if filter_mask is not None else True
         for k, v in selected_args.items():
             if k in ["obs", "sim", "persistent"]:
                 mask = mask & v.notnull()

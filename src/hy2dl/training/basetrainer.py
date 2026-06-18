@@ -3,6 +3,7 @@ import time
 from typing import Any
 
 import torch
+from threadpoolctl import threadpool_limits
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -78,30 +79,31 @@ class BaseTrainer(object):
         # Loop through the batches
         running_loss = 0.0
         training_time = time.time()
-        for idx, sample in enumerate(iterator):
-            if self.cfg.max_updates_per_epoch is not None and idx >= self.cfg.max_updates_per_epoch:
-                break  # reach maximum iterations per epoch
+        with threadpool_limits(limits=1):
+            for idx, sample in enumerate(iterator):
+                if self.cfg.max_updates_per_epoch is not None and idx >= self.cfg.max_updates_per_epoch:
+                    break  # reach maximum iterations per epoch
 
-            sample = upload_to_device(sample, self.cfg.device)  # upload tensors to device
-            self.optimizer.optimizer.zero_grad()  # sets gradients to zero
+                sample = upload_to_device(sample, self.cfg.device)  # upload tensors to device
+                self.optimizer.optimizer.zero_grad()  # sets gradients to zero
 
-            # Inject noise if noise_level is specified in the config
-            if self.cfg.noise_level is not None:
-                sample = self._inject_noise(sample=sample, noise_level=self.cfg.noise_level)
+                # Inject noise if noise_level is specified in the config
+                if self.cfg.noise_level is not None:
+                    sample = self._inject_noise(sample=sample, noise_level=self.cfg.noise_level)
 
-            # Forward pass of the model
-            pred = self.model(sample)
+                # Forward pass of the model
+                pred = self.model(sample)
 
-            loss = self.loss(pred=pred, sample=sample)  # calcuate loss
-            loss.backward()  # backpropagation (calculate gradients)
-            self.optimizer.clip_grad_and_step(epoch, idx)  # update model parameters (e.g, weights and biases)
+                loss = self.loss(pred=pred, sample=sample)  # calcuate loss
+                loss.backward()  # backpropagation (calculate gradients)
+                self.optimizer.clip_grad_and_step(epoch, idx)  # update model parameters (e.g, weights and biases)
 
-            # Keep track of the loss evolution
-            running_loss += (loss.detach().item() - running_loss) / (idx + 1)
-            iterator.set_postfix({"average loss": f"{running_loss:.3f}"})
+                # Keep track of the loss evolution
+                running_loss += (loss.detach().item() - running_loss) / (idx + 1)
+                iterator.set_postfix({"average loss": f"{running_loss:.3f}"})
 
-            # remove elements from cuda to free memory
-            del sample, pred
+                # remove elements from cuda to free memory
+                del sample, pred
 
         report_lr = self.optimizer.optimizer.param_groups[0]["lr"]
         report_time = str(datetime.timedelta(seconds=int(time.time() - training_time)))

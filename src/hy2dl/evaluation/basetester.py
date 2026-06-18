@@ -6,6 +6,7 @@ import pandas as pd
 import torch
 import xarray as xr
 import zarr
+from threadpoolctl import threadpool_limits
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -96,24 +97,25 @@ class BaseTester(object):
                 leave=False,
             )
 
-            for sample in iterator:
-                sample = upload_to_device(sample, self.cfg.device)
-                batch_gauge_id = sample["gauge_id"][0]
+            with threadpool_limits(limits=1):
+                for sample in iterator:
+                    sample = upload_to_device(sample, self.cfg.device)
+                    batch_gauge_id = sample["gauge_id"][0]
 
-                # If I am switching to a new gauge, I write the results of the previous one to disk and clear memory
-                if current_gauge is not None and batch_gauge_id != current_gauge:
-                    self._write_to_zarr(current_gauge)
-                    self.gauge_data = {k: [] for k in self.gauge_data}  # clear memory for the new gauge
+                    # If I am switching to a new gauge, I write the results of the previous one to disk and clear memory
+                    if current_gauge is not None and batch_gauge_id != current_gauge:
+                        self._write_to_zarr(current_gauge)
+                        self.gauge_data = {k: [] for k in self.gauge_data}  # clear memory for the new gauge
 
-                # update current gauge
-                current_gauge = batch_gauge_id
+                    # update current gauge
+                    current_gauge = batch_gauge_id
 
-                # run model
-                pred = model(sample)
-                # process results from current batch
-                self._process_results(sample, pred)
-                # free memory
-                del sample, pred
+                    # run model
+                    pred = model(sample)
+                    # process results from current batch
+                    self._process_results(sample, pred)
+                    # free memory
+                    del sample, pred
 
             # Write last gauge to disk
             if current_gauge is not None:

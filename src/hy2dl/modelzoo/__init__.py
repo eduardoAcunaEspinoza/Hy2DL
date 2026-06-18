@@ -7,11 +7,7 @@ from hy2dl.modelzoo.lstmmdn import LSTMMDN
 from hy2dl.utils.config import Config
 
 # Define the registry mapping
-model_registry = {
-    "cudalstm": CudaLSTM,
-    "hybrid": Hybrid,
-    "lstmmdn": LSTMMDN,
-}
+model_registry = {"cudalstm": CudaLSTM, "hybrid": Hybrid, "lstmmdn": LSTMMDN}
 
 
 def get_model(cfg: Config) -> nn.Module:
