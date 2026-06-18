@@ -93,7 +93,7 @@ class BaseDataset(Dataset):
         ### -----------------------------------------------
         ### Read sample dataset to get metadata of interest
         ### -----------------------------------------------
-        df_sample = self._read_data(gauge_id=gauge_id[0])
+        df_sample = self._read_data(gauge_id=self.gauge_id[0])
 
         # Extract time metadata
         self.data_freq = pd.infer_freq(df_sample.index)
@@ -842,7 +842,9 @@ class BaseDataset(Dataset):
 
         # Process each entity using dask
         with (
-            LocalCluster(n_workers=max(self.cfg.num_workers, 1), threads_per_worker=1) as cluster,
+            LocalCluster(
+                n_workers=max(self.cfg.num_workers, 1), threads_per_worker=1, scheduler_port=0, dashboard_address=":0"
+            ) as cluster,
             Client(cluster) as client,
         ):
             futures = client.map(self._process_df, self.gauge_id, extract_values=True)
@@ -899,7 +901,9 @@ class BaseDataset(Dataset):
 
         # Process each entity using dask
         with (
-            LocalCluster(n_workers=max(self.cfg.num_workers, 1), threads_per_worker=1) as cluster,
+            LocalCluster(
+                n_workers=max(self.cfg.num_workers, 1), threads_per_worker=1, scheduler_port=0, dashboard_address=":0"
+            ) as cluster,
             Client(cluster) as client,
         ):
             futures = client.map(self._write_df_to_zarr, self.gauge_id, gauge_idx)  # Run function

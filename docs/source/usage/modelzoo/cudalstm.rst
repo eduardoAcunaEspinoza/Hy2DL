@@ -5,8 +5,22 @@ CudaLSTM
 
 Standard case
 -------------
-   The LSTM cell is used to analyze single-frequency data (e.g. daily data) in simulation mode. 
+   The LSTM cell is used to analyze single-frequency data (e.g. daily data) in simulation mode. In the most standard case, we use the LSTM cell in a sequence-to-one configuration, where the model is trained to predict the next time step given a sequence (``seq_length``) of previous time steps. This case is ilustrated in the figure below.
 
+   .. figure:: ../../_static/lstm_seqto1.png
+      :alt: LSTM sequence-to-one
+      :align: center
+
+      Standard case: LSTM sequence-to-one
+
+   By modifying the configuration argument ``predict_last_n`` (default: 1) the LSTM cell can be used in a sequence-to-sequence configuration, where the model is trained to predict multiple time steps at once. This case is ilustrated in the figure below.
+
+   .. figure:: ../../_static/lstm_seqtoseq.png
+      :alt: LSTM sequence-to-sequence.
+      :align: center
+
+      LSTM sequence-to-sequence. In the case ilustrated here, ``predict_last_n = 3``
+      
 Multi-frequency
 ---------------
    By modifying configuration arguments, multiple temporal resolutions (e.g. hourly and daily) can be processed. Depending on the amount of inputs per frequency, different embeddings can be used to map the inputs to a common shared dimension. Details of the configuration arguments related to this model can be found in :ref:`mf_reference` and :ref:`emb_reference`.
