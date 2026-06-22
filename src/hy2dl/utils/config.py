@@ -601,6 +601,22 @@ class Config(object):
         return self._cfg.get("loss", "nse_basin_averaged")
 
     @property
+    def mask_counts(self) -> dict[str, int]:
+        return self._cfg.get("mask_counts", {})
+
+    @property
+    def mask_groups(self) -> dict[str, list]:
+        return self._cfg.get("mask_groups", {})
+
+    @property
+    def mask_noise_std_factor(self) -> float:
+        return self._cfg.get("mask_noise_std_factor", 0.0)
+
+    @property
+    def masked_mse_aggregation(self) -> str:
+        return self._cfg.get("masked_mse_aggregation", "variable")
+
+    @property
     def max_updates_per_epoch(self) -> int:
         return self._cfg.get("max_updates_per_epoch")
 
