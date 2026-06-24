@@ -5,6 +5,7 @@ from hy2dl.evaluation.forecast_tester_mdn import ForecastTesterMDN
 from hy2dl.evaluation.hybridmodel_tester import HybridModelTester
 from hy2dl.evaluation.simulation_tester import SimulationTester
 from hy2dl.evaluation.simulation_tester_mdn import SimulationTesterMDN
+from hy2dl.evaluation.ssl_tester import SSLTester
 from hy2dl.utils.config import Config
 
 __all__ = ["calculate_metrics", "get_tester"]
@@ -24,6 +25,8 @@ def get_tester(cfg: Config) -> BaseTester:
             evaluator = SimulationTesterMDN
         elif cfg.model.lower() == "hybrid":
             evaluator = HybridModelTester
+        elif cfg.model.lower() == "lstm_ssl":
+            evaluator = SSLTester
         else:
             evaluator = SimulationTester
     else:

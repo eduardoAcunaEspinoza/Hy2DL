@@ -16,9 +16,9 @@ dynamic_input:
 - radiation_global_mean
 - temperature_min
 - temperature_max
-- discharge_spec
+- discharge_spec_obs
 target:
-- discharge_spec
+- discharge_spec_obs
 - temperature_min
 - temperature_max
 static_input:
@@ -70,11 +70,25 @@ loss: masked_mse
 # Self-supervised channel masking
 # Each entry is a "unit": a single variable string, or a nested list of variables
 # that should be masked jointly (conditional bundle).
-mask_groups:
+mask_groups:                              # define one ore more mask groups, each with its own masking configuration
   reconstruction_targets:
-  - discharge_spec
+  - discharge_spec_obs
   - [temperature_min, temperature_max]   # conditional: both or neither
-mask_counts:
-  reconstruction_targets: 1               # mask 1 of the 2 units per sample
+mask_counts:                              # number of units to mask per sample, per mask group (each mask group defined needs a mask count)
+  reconstruction_targets: 1               # mask 1 of the x (here 2) units per sample
 mask_noise_std_factor: 0.01
 masked_mse_aggregation: variable
+
+# Evaluation scenarios for SSLTester. For each scenario, the listed variables
+# are forced to NaN at the input during testing (the model replaces NaN with
+# its learned mask token). Predictions are written to a separate zarr per
+# scenario at `<save_folder>/<period>_results_<name>.zarr`.
+eval_scenarios:
+  - name: single_discharge
+    mask_vars: [discharge_spec_obs]
+  - name: double_temperature
+    mask_vars: [temperature_min, temperature_max]
+  - name: all_targets
+    mask_vars: [discharge_spec_obs, temperature_min, temperature_max]
+  - name: no_masking  # pure imputation: no variables are masked at the input NaNs are filled
+    mask_vars: []

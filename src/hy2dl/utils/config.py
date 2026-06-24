@@ -547,6 +547,21 @@ class Config(object):
         return self._cfg.get("epochs")
 
     @property
+    def eval_scenarios(self) -> Optional[list[dict]]:
+        """List of evaluation scenarios for ``SSLTester``.
+
+        Each scenario is a dict with keys ``name`` (str) and ``mask_vars``
+        (list[str]). At evaluation, the listed variables are forced to NaN at
+        the input so the model replaces them with its mask token, producing
+        one zarr output per scenario named
+        ``<period>_results_<scenario_name>.zarr``.
+
+        Returns ``None`` if not configured; the tester then runs a single
+        ``default`` scenario with no forced masking.
+        """
+        return self._cfg.get("eval_scenarios")
+
+    @property
     def experiment_name(self) -> str:
         # If experiment_name is not set, create a random one
         if self._cfg.get("experiment_name") is None:
