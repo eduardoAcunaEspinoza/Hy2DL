@@ -547,6 +547,21 @@ class Config(object):
         return self._cfg.get("epochs")
 
     @property
+    def eval_scenarios(self) -> Optional[list[dict]]:
+        """List of evaluation scenarios for ``SSLTester``.
+
+        Each scenario is a dict with keys ``name`` (str) and ``mask_vars``
+        (list[str]). At evaluation, the listed variables are forced to NaN at
+        the input so the model replaces them with its mask token, producing
+        one zarr output per scenario named
+        ``<period>_results_<scenario_name>.zarr``.
+
+        Returns ``None`` if not configured; the tester then runs a single
+        ``default`` scenario with no forced masking.
+        """
+        return self._cfg.get("eval_scenarios")
+
+    @property
     def experiment_name(self) -> str:
         # If experiment_name is not set, create a random one
         if self._cfg.get("experiment_name") is None:
@@ -599,6 +614,22 @@ class Config(object):
     @property
     def loss(self) -> str:
         return self._cfg.get("loss", "nse_basin_averaged")
+
+    @property
+    def mask_counts(self) -> dict[str, int]:
+        return self._cfg.get("mask_counts", {})
+
+    @property
+    def mask_groups(self) -> dict[str, list]:
+        return self._cfg.get("mask_groups", {})
+
+    @property
+    def mask_noise_std_factor(self) -> float:
+        return self._cfg.get("mask_noise_std_factor", 0.0)
+
+    @property
+    def masked_mse_aggregation(self) -> str:
+        return self._cfg.get("masked_mse_aggregation", "variable")
 
     @property
     def max_updates_per_epoch(self) -> int:

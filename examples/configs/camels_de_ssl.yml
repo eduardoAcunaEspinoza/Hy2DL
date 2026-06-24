@@ -1,0 +1,94 @@
+# Self-supervised LSTM on CAMELS-DE.
+#
+# Demonstrates the LSTM_SSL model with fixed-count channel masking, conditional bundling
+# (temperature_min and temperature_max masked jointly), a learnable mask token with
+# per-variable Gaussian noise, and the MaskedMSE reconstruction loss.
+#
+# Targets MUST also appear in dynamic_input for self-supervision: the model needs to
+# observe (and mask) them at the input in order to learn to reconstruct them.
+
+experiment_name: LSTM_SSL_CAMELS_DE
+path_data: ../data/CAMELS_DE
+path_entities: ../data/basin_id/basins_camels_de_1582.txt
+dynamic_input:
+- precipitation_mean
+- precipitation_stdev
+- radiation_global_mean
+- temperature_min
+- temperature_max
+- discharge_spec_obs
+target:
+- discharge_spec_obs
+- temperature_min
+- temperature_max
+static_input:
+- area
+- elev_mean
+- clay_0_30cm_mean
+- sand_0_30cm_mean
+- silt_0_30cm_mean
+- artificial_surfaces_perc
+- agricultural_areas_perc
+- forests_and_seminatural_areas_perc
+- wetlands_perc
+- water_bodies_perc
+- p_mean
+- p_seasonality
+- frac_snow
+- high_prec_freq
+- low_prec_freq
+- high_prec_dur
+- low_prec_dur
+training_period:
+- '1970-10-01'
+- '1999-12-31'
+validation_period:
+- '1965-10-01'
+- '1970-09-30'
+testing_period:
+- '2000-01-01'
+- '2020-12-31'
+seq_length: 365
+hidden_size: 256
+batch_size_training: 256
+batch_size_evaluation: 1024
+epochs: 20
+dropout_rate: 0.4
+learning_rate: 0.001
+steplr_step_size: 10
+steplr_gamma: 0.5
+validate_every: 4
+device: gpu
+num_workers: 4
+random_seed: 110
+dataset: camels_de
+model: lstm_ssl
+initial_forget_bias: 3.0
+predict_last_n: 1
+loss: masked_mse
+
+# Self-supervised channel masking
+# Each entry is a "unit": a single variable string, or a nested list of variables
+# that should be masked jointly (conditional bundle).
+mask_groups:                              # define one ore more mask groups, each with its own masking configuration
+  reconstruction_targets:
+  - discharge_spec_obs
+  - [temperature_min, temperature_max]   # conditional: both or neither
+mask_counts:                              # number of units to mask per sample, per mask group (each mask group defined needs a mask count)
+  reconstruction_targets: 1               # mask 1 of the x (here 2) units per sample
+mask_noise_std_factor: 0.01
+masked_mse_aggregation: variable
+
+# Evaluation scenarios for SSLTester. For each scenario, the listed variables
+# are forced to NaN at the input during testing (the model replaces NaN with
+# its learned mask token). Predictions are written to a separate zarr per
+# scenario at `<save_folder>/<period>_results_<name>.zarr`.
+eval_scenarios:
+  - name: single_discharge
+    mask_vars: [discharge_spec_obs]
+  - name: double_temperature
+    mask_vars: [temperature_min, temperature_max]
+  - name: all_targets
+    mask_vars: [discharge_spec_obs, temperature_min, temperature_max]
+  - name: no_masking  # pure imputation: no variables are masked at the input NaNs are filled
+    mask_vars: []

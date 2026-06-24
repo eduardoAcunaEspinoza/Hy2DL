@@ -3,8 +3,10 @@ from hy2dl.utils.config import Config
 
 # Define the registry mapping
 loss_registry = {
+    "masked_mse": loss_module.MaskedMSE,
     "nll": loss_module.NLL,
     "nse_basin_averaged": loss_module.NSEBasinAveraged,
+    "variable_averaged_mse": loss_module.VariableAveragedMSE,
     "weighted_mse": loss_module.WeightedMSE,
 }
 

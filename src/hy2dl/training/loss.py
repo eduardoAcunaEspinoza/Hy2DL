@@ -154,3 +154,82 @@ class WeightedMSE(BaseLoss):
         weighted_squared_error = target_weights_masked * squared_error
 
         return torch.mean(weighted_squared_error)
+
+
+class VariableAveragedMSE(BaseLoss):
+    """Variable-averaged Mean Squared Error.
+
+    Computes the MSE separately for each target variable (last tensor dimension) using only the observed (non-NaN)
+    samples of that variable, and then averages these per-variable errors. Targets with no observations in the batch
+    are skipped. This formulation ensures that each variable contributes equally to the batch loss, irrespective of
+    its sample coverage, which is useful for multi-target training under strongly imbalanced target densities.
+
+    """
+
+    def __init__(self, cfg: Config):
+        super().__init__(cfg)
+
+    def forward(self, pred: dict[str, torch.Tensor], sample: dict[str, Any]) -> torch.Tensor:
+        y_sim = pred["y_hat"]
+        y_obs = sample["y_obs"]
+
+        n_targets = y_obs.shape[-1]
+        per_variable_losses = []
+        for t in range(n_targets):
+            obs_t = y_obs[..., t]
+            sim_t = y_sim[..., t]
+            valid = ~torch.isnan(obs_t)
+            if valid.any():
+                per_variable_losses.append(torch.mean((sim_t[valid] - obs_t[valid]) ** 2))
+
+        if not per_variable_losses:
+            return torch.zeros((), device=y_sim.device, dtype=y_sim.dtype, requires_grad=True)
+        return torch.stack(per_variable_losses).mean()
+
+
+class MaskedMSE(BaseLoss):
+    """Mean Squared Error restricted to channels that were masked in the input.
+
+    Computes the MSE only at positions where the corresponding input channel was masked for the given sample, and
+    where an observed value is available. Positions that were replaced by a mask token but have no observed ground
+    truth (NaN in ``y_obs``) are excluded automatically. This is intended for self-supervised reconstruction
+    objectives where the loss should only consider channels the model was asked to reconstruct.
+
+    The aggregation strategy is read from ``cfg.masked_mse_aggregation``:
+
+    * ``'variable'`` (default) -- average MSE per target first, then across targets.
+    * ``'sample'`` -- average over all valid masked positions jointly.
+
+    """
+
+    def __init__(self, cfg: Config):
+        super().__init__(cfg)
+        self.aggregation = cfg.masked_mse_aggregation
+        if self.aggregation not in ("variable", "sample"):
+            raise ValueError(
+                f"masked_mse_aggregation must be 'variable' or 'sample', got {self.aggregation!r}."
+            )
+
+    def forward(self, pred: dict[str, torch.Tensor], sample: dict[str, Any]) -> torch.Tensor:
+        y_sim = pred["y_hat"]
+        y_obs = sample["y_obs"]
+        input_mask = pred["input_mask"]
+
+        valid = input_mask & ~torch.isnan(y_obs)
+
+        if self.aggregation == "sample":
+            if not valid.any():
+                return torch.zeros((), device=y_sim.device, dtype=y_sim.dtype, requires_grad=True)
+            return torch.mean((y_sim[valid] - y_obs[valid]) ** 2)
+
+        n_targets = y_obs.shape[-1]
+        per_variable_losses = []
+        for t in range(n_targets):
+            valid_t = valid[..., t]
+            if valid_t.any():
+                diff = y_sim[..., t][valid_t] - y_obs[..., t][valid_t]
+                per_variable_losses.append(torch.mean(diff ** 2))
+
+        if not per_variable_losses:
+            return torch.zeros((), device=y_sim.device, dtype=y_sim.dtype, requires_grad=True)
+        return torch.stack(per_variable_losses).mean()

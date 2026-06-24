@@ -3,11 +3,12 @@ import torch.nn as nn
 # Deep learning methods
 from hy2dl.modelzoo.cudalstm import CudaLSTM
 from hy2dl.modelzoo.hybrid import Hybrid
+from hy2dl.modelzoo.lstm_ssl import LSTM_SSL
 from hy2dl.modelzoo.lstmmdn import LSTMMDN
 from hy2dl.utils.config import Config
 
 # Define the registry mapping
-model_registry = {"cudalstm": CudaLSTM, "hybrid": Hybrid, "lstmmdn": LSTMMDN}
+model_registry = {"cudalstm": CudaLSTM, "hybrid": Hybrid, "lstm_ssl": LSTM_SSL, "lstmmdn": LSTMMDN}
 
 
 def get_model(cfg: Config) -> nn.Module:

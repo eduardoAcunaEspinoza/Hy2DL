@@ -24,6 +24,19 @@ def rmse(obs: xr.DataArray, sim: xr.DataArray) -> xr.DataArray:
     return mse**0.5
 
 
+@registry.register("kge")
+def kge(obs: xr.DataArray, sim: xr.DataArray) -> xr.DataArray:
+    """Calculate modified Kling-Gupta Efficiency (Kling et al. 2012)."""
+    obs_mean = obs.mean(dim="date", skipna=True)
+    sim_mean = sim.mean(dim="date", skipna=True)
+    obs_std = obs.std(dim="date", skipna=True)
+    sim_std = sim.std(dim="date", skipna=True)
+    r = xr.corr(obs, sim, dim="date")
+    alpha = (sim_std / sim_mean) / (obs_std / obs_mean)
+    beta = sim_mean / obs_mean
+    return 1.0 - ((r - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2) ** 0.5
+
+
 # --------------------------------------------------------------
 #  Deterministic functions, applicable only to forecast models
 # --------------------------------------------------------------
