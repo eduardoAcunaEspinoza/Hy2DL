@@ -71,7 +71,8 @@ validate_every: 1
 device: cuda:0
 num_workers: 8
 dataset: camels_us
-model: lstmmdn
+model: CudaLSTM
+head: mdn
 distribution: laplacian
 num_mixture_components: 3
 noise_level: 0.2

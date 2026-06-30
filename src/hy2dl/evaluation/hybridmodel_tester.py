@@ -15,7 +15,7 @@ class HybridModelTester(BaseTester):
     ----------
     cfg : Config
         Configuration object containing model hyperparameters and settings.
-    evaluation_dataset : BaseDataset
+    evaluation_dataset : hy2dl.datasetzoo.basedataset.BaseDataset
         Dataset used for evaluation.
 
     """
@@ -132,7 +132,7 @@ class HybridModelTester(BaseTester):
         y_obs_filled[date_indices[valid_], :] = y_obs[valid_]
         y_sim_filled[date_indices[valid_], :] = y_sim[valid_]
 
-        # write observed, simulated and mdn weights to zarr
+        # write observed, simulated values to zarr
         zarr_file = zarr.open(self.path_zarr, mode="r+")
         zarr_file["y_obs"][idx, :, :] = y_obs_filled
         zarr_file["y_sim"][idx, :, :] = y_sim_filled

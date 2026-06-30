@@ -1,5 +1,6 @@
 import os
 import random
+import warnings
 from itertools import chain
 from pathlib import Path
 from typing import Any, Optional
@@ -282,8 +283,36 @@ class Config(object):
             raise ValueError(
                 "`hybrid` model requires `conceptual_model` and `dynamic_input_conceptual_model` to be specified."
             )
+
+        # Depreciation warning for `lstmmdn` model
         if self.model == "lstmmdn":
-            from hy2dl.utils import distribution_registry
+            warnings.warn(
+                "`lstmmdn` model is deprecated and will be removed in future versions. "
+                "Please use `cudalstm` with `mdn` head instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            self._cfg["model"] = "cudalstm"
+            self._cfg["head"] = "mdn"
+
+        # Check models and head
+        from hy2dl.modelzoo import get_head_registry, get_model_registry
+
+        model_registry = get_model_registry()
+        head_registry = get_head_registry()
+
+        if self.model not in model_registry:
+            available_models = list(model_registry.keys())
+            raise NotImplementedError(f"'{self.model}' not implemented. Available models: {available_models}")
+        if self.head not in head_registry:
+            available_heads = list(head_registry.keys())
+            raise NotImplementedError(f"'{self.head}' not implemented. Available heads: {available_heads}")
+
+        # Check for specific configurations required by certain heads
+        if self.head == "mdn":
+            from hy2dl.utils import get_distribution_registry
+
+            distribution_registry = get_distribution_registry()
 
             if self.distribution not in distribution_registry:
                 raise ValueError(
@@ -291,7 +320,7 @@ class Config(object):
                     f" available distributions: {distribution_registry.keys()}"
                 )
             if self.num_mixture_components is None:
-                raise ValueError("`lstmmdn` model requires `num_mixture_components` to be specified.")
+                raise ValueError("`mdn` head requires `num_mixture_components` to be specified.")
 
     def _check_nan_settings_hc(self):
         """Check hindcast settings when working with nan handling methods"""
@@ -579,6 +608,10 @@ class Config(object):
     @property
     def forecast_input(self) -> list[str] | dict[str, list[str]]:
         return self._cfg.get("forecast_input", [])
+
+    @property
+    def head(self) -> str:
+        return self._cfg.get("head", "regression")
 
     @property
     def hidden_size(self) -> int:
