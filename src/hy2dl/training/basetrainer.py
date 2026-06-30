@@ -22,7 +22,7 @@ class BaseTrainer(object):
     ----------
     cfg : Config
         Configuration object containing model hyperparameters and settings.
-    training_dataset : BaseDataset
+    training_dataset : hy2dl.datasetzoo.basedataset.BaseDataset
         Dataset used for training
 
     """

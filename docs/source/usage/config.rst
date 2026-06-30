@@ -358,8 +358,10 @@ Forecast model
 
 .. _mdn_reference:
 
-Probabilistic model
------------------------
+Mixture Density Network
+-----------------------------
+- ``head`` (str):
+    Name of the head layer to be used after the LSTM. Use "mdn" for a Mixture Density Network. Default is "regression".
 
 - ``num_mixture_components`` (int):
     Number of mixture components in the Mixture Density Network (MDN).

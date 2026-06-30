@@ -27,7 +27,7 @@ class BaseTester(object):
     ----------
     cfg : Config
         Configuration object containing model hyperparameters and settings.
-    evaluation_dataset : BaseDataset
+    evaluation_dataset : hy2dl.datasetzoo.basedataset.BaseDataset
         Dataset used for evaluation.
 
     """
@@ -176,7 +176,7 @@ class BaseTester(object):
 
         Parameters
         ----------
-        evaluation_dataset : BaseDataset
+        evaluation_dataset : hy2dl.datasetzoo.basedataset.BaseDataset
             The dataset used for evaluation, which contains the valid samples with their corresponding dates.
 
         Returns

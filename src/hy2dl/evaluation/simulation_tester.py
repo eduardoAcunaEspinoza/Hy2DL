@@ -14,7 +14,7 @@ class SimulationTester(BaseTester):
     ----------
     cfg : Config
         Configuration object containing model hyperparameters and settings.
-    evaluation_dataset : BaseDataset
+    evaluation_dataset : hy2dl.datasetzoo.basedataset.BaseDataset
         Dataset used for evaluation.
 
     """

@@ -3,6 +3,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from hy2dl.modelzoo import get_head
 from hy2dl.modelzoo.inputlayer import InputLayer
 from hy2dl.utils.config import Config
 
@@ -10,18 +11,23 @@ from hy2dl.utils.config import Config
 class CudaLSTM(nn.Module):
     """LSTM model.
 
-    This class implements an LSTM layer. If config.model == "cudalstm", the LSTM layer is followed by a linear head,
-    which maps the hidden states produced by the LSTM into predictions. Otherwise, it is assumed the model is being used
-    as part of a larger architecture, and only the hidden states are returned.
+    This class implements Pytorch's cuda-optimized LSTM model (nn.LSTM).
 
-    The LSTM layer can operate either in a standard mode (hindcast only) or forecast mode. In forecast mode, the LSTM
-    cell rolls out continuously through both the hindcast and forecast periods using specific embedding layers for each
-    case.
+    The LSTM layer can operate either in a standard mode (hindcast only) or forecast mode. In forecast mode, the model
+    implementes a sequential-forecast framework [1]_ rolling continuously through both the hindcast and forecast periods,
+    using specific embedding layers for each case .
 
     Parameters
     ----------
     cfg : Config
         Configuration object containing model hyperparameters and settings.
+
+    References
+    ----------
+    .. [1] Cohen, D., Amira, R., Aschner, R., Carny, Y., Feinstein, B., Fester, H., Fronman, S., Gauch, M., Gilon, O.,
+        Green, R., Hassidim, A., Klotz, D., Kratzert, F., Korenfeld, D., Loike, G., Markel, A., Matias, Y., Mayo, R.,
+        Metzger, A., . . . Nearing, G. (2026). Extending medium-range global flood forecasts: The Google Global Flood
+        Forecasting Model Version 2. EGUsphere, 2026, 1–31. https://doi.org/10.5194/egusphere-2026-2283
     """
 
     def __init__(self, cfg: Config):
@@ -52,16 +58,12 @@ class CudaLSTM(nn.Module):
             input_size=self.emb_hc.output_size + self.forecast_counter, hidden_size=cfg.hidden_size, batch_first=True
         )
 
-        self.dropout = torch.nn.Dropout(p=cfg.dropout_rate)
-
-        # Add linear head if the LSTM layer is used as a standalone model.
-        if cfg.model.lower() == "cudalstm":
-            self.cudalstm = True
-            self.linear = nn.Linear(in_features=cfg.hidden_size, out_features=cfg.output_features)
-        else:
-            self.cudalstm = False
-
+        self.dropout = nn.Dropout(p=cfg.dropout_rate)
         self.predict_last_n = cfg.predict_last_n
+
+        # Head layer
+        self.head = get_head(cfg=cfg)
+
         self._reset_parameters(cfg=cfg)
 
     def _reset_parameters(self, cfg: Config):
@@ -72,9 +74,6 @@ class CudaLSTM(nn.Module):
     def forward(self, sample: dict[str, Any]) -> dict[str, torch.Tensor]:
         """Forward pass of the LSTM network.
 
-        Processes hindcast features, and optionally concatenates forecast features along the sequence dimension, before
-        passing them through the LSTM and linear head.
-
         Parameters
         ----------
         sample: dict[str, Any]
@@ -84,8 +83,7 @@ class CudaLSTM(nn.Module):
         Returns
         -------
         dict[str, torch.Tensor]
-            y_hat: model predictions, shape (B, N, T)
-            hs: hidden states of LSTM cell, shape (B, N, cfg.hidden_size)
+            Specific output of the model, depending on the head layer used. See `hy2dl.modelzoo.head` for details.
 
         Notes
         -----
@@ -112,4 +110,4 @@ class CudaLSTM(nn.Module):
         hs = hs[:, -self.predict_last_n :, :]
         hs = self.dropout(hs)
 
-        return {"y_hat": self.linear(hs), "hs": hs} if self.cudalstm else {"hs": hs}
+        return self.head(hs)
