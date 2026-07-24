@@ -279,13 +279,16 @@ class Config(object):
 
     def _check_models(self):
         """Check for specific configurations required by certain models."""
-        if self.model == "hybrid" and (self.conceptual_model is None or self.dynamic_input_conceptual_model is None):
+        model_name = self.model.lower()
+        head_name = self.head.lower()
+
+        if model_name == "hybrid" and (self.conceptual_model is None or self.dynamic_input_conceptual_model is None):
             raise ValueError(
                 "`hybrid` model requires `conceptual_model` and `dynamic_input_conceptual_model` to be specified."
             )
 
         # Depreciation warning for `lstmmdn` model
-        if self.model == "lstmmdn":
+        if model_name == "lstmmdn":
             warnings.warn(
                 "`lstmmdn` model is deprecated and will be removed in future versions. "
                 "Please use `cudalstm` with `mdn` head instead.",
@@ -294,6 +297,7 @@ class Config(object):
             )
             self._cfg["model"] = "cudalstm"
             self._cfg["head"] = "mdn"
+            model_name, head_name = "cudalstm", "mdn"
 
         # Check models and head
         from hy2dl.modelzoo import get_head_registry, get_model_registry
@@ -301,15 +305,15 @@ class Config(object):
         model_registry = get_model_registry()
         head_registry = get_head_registry()
 
-        if self.model not in model_registry:
+        if model_name not in model_registry:
             available_models = list(model_registry.keys())
-            raise NotImplementedError(f"'{self.model}' not implemented. Available models: {available_models}")
-        if self.head not in head_registry:
+            raise NotImplementedError(f"'{model_name}' not implemented. Available models: {available_models}")
+        if head_name not in head_registry:
             available_heads = list(head_registry.keys())
-            raise NotImplementedError(f"'{self.head}' not implemented. Available heads: {available_heads}")
+            raise NotImplementedError(f"'{head_name}' not implemented. Available heads: {available_heads}")
 
         # Check for specific configurations required by certain heads
-        if self.head == "mdn":
+        if head_name == "mdn":
             from hy2dl.utils import get_distribution_registry
 
             distribution_registry = get_distribution_registry()
