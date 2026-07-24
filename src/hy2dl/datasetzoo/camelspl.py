@@ -94,6 +94,6 @@ class CAMELS_PL(BaseDataset):
         path_timeseries = self.cfg.path_data / "timeseries" / f"CAMELS_PL_hydromet_timeseries_{gauge_id}.csv"
         # load time series
         df = pd.read_csv(
-            path_timeseries, index_col="date", parse_dates=["date"], dtype=defaultdict(lambda: "float32", date=str)
-        )
+            path_timeseries, index_col="date", parse_dates=["date"]
+        ).astype("float32")
         return df

@@ -112,6 +112,6 @@ class CARAVAN(BaseDataset):
         subdataset_name = basin.split("_")[0].lower()
         filepath = data_dir / "timeseries" / "csv" / subdataset_name / f"{basin}.csv"
         df = pd.read_csv(
-            filepath, index_col="date", parse_dates=["date"], dtype=defaultdict(lambda: "float32", date=str)
-        )
+            filepath, index_col="date", parse_dates=["date"]
+        ).astype("float32")
         return df

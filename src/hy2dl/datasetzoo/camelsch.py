@@ -100,6 +100,6 @@ class CAMELS_CH(BaseDataset):
         )
         # load time series
         df = pd.read_csv(
-            path_timeseries, index_col="date", parse_dates=["date"], dtype=defaultdict(lambda: "float32", date=str)
-        )
+            path_timeseries, index_col="date", parse_dates=["date"]
+        ).astype("float32")
         return df
