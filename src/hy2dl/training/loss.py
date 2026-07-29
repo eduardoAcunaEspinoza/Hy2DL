@@ -52,6 +52,68 @@ class NLL(BaseLoss):
 
         return torch.dot(nll, self.target_weights)
 
+class CRPS(BaseLoss):
+    """Continuous Ranked Probability Score.
+
+    Calculates the mean CRPS between the predictive distribution and
+    observations, optionally weighted across target variables.
+
+    Currently CRPS only for a single logistic distribution is supported
+    """
+
+    def __init__(self, cfg: Config):
+        super().__init__(cfg)
+        self.distribution = get_distribution(distribution=cfg.distribution)
+
+        if cfg.target_weights is not None:
+            self.target_weights = torch.tensor(
+                cfg.target_weights,
+                dtype=torch.float32,
+                device=cfg.device,
+            )
+        else:
+            self.target_weights = torch.ones(
+                len(cfg.target),
+                dtype=torch.float32,
+                device=cfg.device,
+            )
+
+    def forward(self, pred: dict[str, torch.Tensor], sample: dict[str, Any]) -> torch.Tensor:
+
+        y_obs = sample["y_obs"]
+        params = pred["params"]
+    
+        # ASSERT: must be a single logistic distribution (no mixture)
+        # Case 1: params has explicit mixture dimension K
+        if params["loc"].ndim >= 4:
+            # e.g. [B, T, K, P] or [B, L, T, K, P]
+            assert params["loc"].shape[-2] == 1, (
+                f"CRPS only supports a single logistic distribution, "
+                f"but got mixture size K={params['loc'].shape[-2]}"
+            )
+    
+    
+        mask = ~torch.isnan(y_obs)
+        y_obs = torch.nan_to_num(y_obs, nan=0.0)
+    
+        # Shape: [batch, seq, target]
+        crps = self.distribution.calc_crps(
+            params=params,
+            weights=None,
+            x=y_obs,
+        )
+    
+        # Ignore NaNs
+        crps = crps * mask
+    
+        # Mean over batch and sequence dimensions
+        sum_crps = crps.sum(dim=(0, 1))
+        n_valid = mask.sum(dim=(0, 1)).clamp(min=1)
+    
+        mean_crps = sum_crps / n_valid
+    
+        return torch.dot(mean_crps, self.target_weights)
+
 
 class NSEBasinAveraged(BaseLoss):
     """Basin-averaged Nash--Sutcliffe Efficiency.

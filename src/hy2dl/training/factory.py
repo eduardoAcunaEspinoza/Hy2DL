@@ -6,6 +6,7 @@ def get_loss_registry():
 
     return {
         "nll": loss_module.NLL,
+        "crps": loss_module.CRPS,
         "nse_basin_averaged": loss_module.NSEBasinAveraged,
         "weighted_mse": loss_module.WeightedMSE,
     }

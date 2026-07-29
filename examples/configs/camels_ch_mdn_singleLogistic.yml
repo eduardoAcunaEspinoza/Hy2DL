@@ -1,0 +1,66 @@
+experiment_name: MDN_singleLogistic
+path_data: ../data/CAMELS_CH
+path_entities: ../data/basin_id/basins_camels_ch_331.txt
+dynamic_input:
+- precipitation(mm/d)
+- temperature_min(degC)
+- temperature_max(degC)
+- rel_sun_dur(%)
+target:
+- discharge_spec(mm/d)
+forcings:
+
+static_input:
+- area
+- elev_mean
+- slope_mean
+- sand_perc
+- silt_perc
+- clay_perc
+- porosity
+- conductivity
+- glac_area
+- dwood_perc
+- ewood_perc
+- crop_perc
+- urban_perc
+- reservoir_cap
+- p_mean
+- pet_mean
+- p_seasonality
+- frac_snow
+- high_prec_freq
+- low_prec_freq
+- high_prec_dur
+- low_prec_dur
+training_period:
+- '1980-10-01'
+- '1995-09-30'
+validation_period:
+- '1995-10-01'
+- '2000-09-30'
+testing_period:
+- '2000-10-01'
+- '2020-09-30'
+seq_length: 365
+hidden_size: 256
+batch_size_training: 256
+batch_size_evaluation: 1024
+initial_forget_bias: 3.0
+epochs: 30
+dropout_rate: 0.5
+learning_rate: 0.0001
+validate_every: 1
+device: cuda:0
+num_workers: 8
+random_seed: 1357
+dataset: camels_ch
+model: cudalstm
+head: mdn
+distribution: logistic
+num_mixture_components: 1 # logistic distribution + CRPS loss only supports a single mixture component
+noise_level: 0.0
+loss : crps
+validation_metric:
+- nse
+- crps
