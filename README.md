@@ -38,9 +38,10 @@ The `pyproject.toml` file includes the package requirements. If you want to inst
 If you find **Hy²DL** useful in your research or applications, please cite it as:
 
 ```bibtex
-@software{acuna2025,
+@software{acuna2026,
   author       = {Eduardo Acuna and
                   Manuel Álvarez Chaves and
+                  Sanika Baste and
                   Alexander Dolich and
                   Benedikt Heudorfer and
                   Ashish Manoj J and
