@@ -1,5 +1,6 @@
 import torch
 import xarray as xr
+import math
 
 from hy2dl.evaluation.registry import registry
 from hy2dl.utils import get_distribution
@@ -57,3 +58,24 @@ def nll(dist: str, obs: xr.DataArray, sim: xr.DataArray, mdn_weight: xr.DataArra
     nll_da = xr.DataArray(nll_tensor.numpy(), coords=obs.coords, dims=obs.dims)
 
     return nll_da.mean(dim="date", skipna=True)
+
+@registry.register("crps", is_probabilistic=True)
+def crps(dist: str, obs: xr.DataArray, sim: xr.DataArray,  mdn_weight: xr.DataArray,  **kwargs) -> xr.DataArray:
+    distribution = get_distribution(dist)
+    params_xr = {k: kwargs[k] for k in distribution.parameters}
+
+    # To avoid repeating code we use the logpdf function from hy2dl.utils.distributions. However logpdf is defined in
+    # pytorch, so we need to, temporarily, convert the Xarray DataArrays to tensors.
+    obs_t = torch.as_tensor(obs.values, dtype=torch.float32)
+    weights_t = torch.as_tensor(mdn_weight.values, dtype=torch.float32)
+    params_t = {k: torch.as_tensor(v.values, dtype=torch.float32) for k, v in params_xr.items()}
+
+    with torch.no_grad():
+        # Call the crps function, applying dummy masking to avoid nans.
+        crps = distribution.calc_crps(params=params_t, weights=weights_t, x=torch.nan_to_num(obs_t, nan=0.0))
+        # Put nans back on, so they are filtered out by xarray (skipna=True).
+        crps_tensor = torch.where(torch.isnan(obs_t), torch.tensor(float("nan")), crps)
+
+    crps_da = xr.DataArray(crps_tensor.numpy(), coords=obs.coords, dims=obs.dims)
+
+    return crps_da.mean(dim="date", skipna=True)

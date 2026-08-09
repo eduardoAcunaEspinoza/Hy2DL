@@ -5,6 +5,7 @@ def get_distribution_registry():
     return {
         "gaussian": distribution_module.GaussianMixture,
         "laplacian": distribution_module.AsymmetricLaplaceMixture,
+        "logistic": distribution_module.LogisticMixture,
     }
 
 
