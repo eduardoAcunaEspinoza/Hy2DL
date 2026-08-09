@@ -1,7 +1,4 @@
 # import necessary packages
-from collections import defaultdict
-from typing import Optional
-
 import pandas as pd
 
 from hy2dl.datasetzoo import BaseDataset
@@ -21,7 +18,7 @@ class CAMELS_PL(BaseDataset):
         Configuration file.
     time_period : {'training', 'validation', 'testing'}
         Defines the period for which the data will be loaded.
-    gauge_id : Optional[str | list[str]], default=None
+    gauge_id : str | list[str] | None, default=None
         Id of gauge(s) to be loaded.
 
     References
@@ -36,7 +33,7 @@ class CAMELS_PL(BaseDataset):
         self,
         cfg: Config,
         time_period: str,
-        gauge_id: Optional[str | list[str]] = None,
+        gauge_id: str | list[str] | None = None,
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
         super(CAMELS_PL, self).__init__(cfg=cfg, time_period=time_period, gauge_id=gauge_id)
@@ -93,7 +90,5 @@ class CAMELS_PL(BaseDataset):
         """
         path_timeseries = self.cfg.path_data / "timeseries" / f"CAMELS_PL_hydromet_timeseries_{gauge_id}.csv"
         # load time series
-        df = pd.read_csv(
-            path_timeseries, index_col="date", parse_dates=["date"]
-        ).astype("float32")
+        df = pd.read_csv(path_timeseries, index_col="date", parse_dates=["date"]).astype("float32")
         return df

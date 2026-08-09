@@ -127,7 +127,7 @@ class BaseTester(object):
         self,
         model: torch.nn.Module,
         epoch: int,
-        filter_mask: xr.DataArray = None,
+        filter_mask: xr.DataArray | None = None,
     ):
         """Validate the model every cfg.validate_every epochs and calculate the validation metric.
 
@@ -138,8 +138,7 @@ class BaseTester(object):
         epoch : int
             Current epoch number.
         forecast_mode : bool
-            True if the dataset is from a forecast model (with lead_time dimension), False if from a simulation model.
-        filter_mask : xr.DataArray, optional
+         filter_mask : xr.DataArray | None
             Boolean DataArray to filter values during evaluation. Expected dimensions (gauge_id, date).
 
         """
@@ -151,7 +150,7 @@ class BaseTester(object):
             validation_loss = calculate_metrics(
                 ds_results=self.path_zarr,
                 metric_name=self.cfg.validation_metric,
-                forecast_mode=False if self.cfg.forecast_signals == [] else True,
+                forecast_mode=bool(self.cfg.forecast_signals),
                 distribution=self.cfg.distribution,
                 filter_mask=filter_mask,
             )
@@ -162,7 +161,7 @@ class BaseTester(object):
             validation_loss = validation_loss.to_series().to_dict()
 
             metrics_str = "".join([f"{validation_loss[m]:^10.3f}|" for m in self.cfg.validation_metric])
-            time_str = f"{str(datetime.timedelta(seconds=int(time.time() - validation_time))):^10}|"
+            time_str = f"{datetime.timedelta(seconds=int(time.time() - validation_time))!s:^10}|"
 
             self.validation_report = metrics_str + time_str
         else:

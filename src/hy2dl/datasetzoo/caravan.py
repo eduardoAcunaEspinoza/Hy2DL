@@ -1,7 +1,4 @@
 # import necessary packages
-from collections import defaultdict
-from typing import Optional
-
 import pandas as pd
 
 from hy2dl.datasetzoo import BaseDataset
@@ -23,7 +20,7 @@ class CARAVAN(BaseDataset):
         Configuration file.
     time_period : {'training', 'validation', 'testing'}
         Defines the period for which the data will be loaded.
-    gauge_id : Optional[str | list[str]], default=None
+    gauge_id : str | list[str] | None, default=None
         Id of gauge(s) to be loaded.
 
     References
@@ -39,7 +36,7 @@ class CARAVAN(BaseDataset):
         self,
         cfg: Config,
         time_period: str,
-        gauge_id: Optional[str | list[str]] = None,
+        gauge_id: str | list[str] | None = None,
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
         super(CARAVAN, self).__init__(cfg=cfg, time_period=time_period, gauge_id=gauge_id)
@@ -111,7 +108,5 @@ class CARAVAN(BaseDataset):
         # Get the subdataset name from the basin string.
         subdataset_name = basin.split("_")[0].lower()
         filepath = data_dir / "timeseries" / "csv" / subdataset_name / f"{basin}.csv"
-        df = pd.read_csv(
-            filepath, index_col="date", parse_dates=["date"]
-        ).astype("float32")
+        df = pd.read_csv(filepath, index_col="date", parse_dates=["date"]).astype("float32")
         return df

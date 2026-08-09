@@ -1,7 +1,4 @@
 # import necessary packages
-from collections import defaultdict
-from typing import Optional
-
 import numpy as np
 import pandas as pd
 
@@ -24,7 +21,7 @@ class Hourly_CAMELS_US(CAMELS_US):
         Configuration file.
     time_period : {'training', 'validation', 'testing'}
         Defines the period for which the data will be loaded.
-    gauge_id : Optional[str | list[str]], default=None
+    gauge_id : str | list[str] | None, default=None
         Id of gauge(s) to be loaded.
 
     References
@@ -46,7 +43,7 @@ class Hourly_CAMELS_US(CAMELS_US):
         self,
         cfg: Config,
         time_period: str,
-        gauge_id: Optional[str | list[str]] = None,
+        gauge_id: str | list[str] | None = None,
     ):
         # Run the __init__ method of CAMELS_US class
         super(Hourly_CAMELS_US, self).__init__(cfg=cfg, time_period=time_period, gauge_id=gauge_id)
@@ -103,9 +100,7 @@ class Hourly_CAMELS_US(CAMELS_US):
         """
         path_timeseries = self.cfg.path_data / "hourly" / f"{forcing}" / f"{gauge_id}_hourly_nldas.csv"
         # load time series
-        df = pd.read_csv(
-            path_timeseries, index_col=["date"], parse_dates=["date"], dtype=defaultdict(lambda: "float32", date=str)
-        )
+        df = pd.read_csv(path_timeseries, index_col="date", parse_dates=["date"]).astype("float32")
 
         return df
 

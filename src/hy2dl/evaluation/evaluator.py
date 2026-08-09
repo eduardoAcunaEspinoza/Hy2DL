@@ -80,7 +80,7 @@ def _apply_forecast_metric(
 
 
 def _apply_simulation_metric(
-    ds: xr.Dataset, metric_name: str, filter_mask: xr.DataArray = None, distribution: str = None
+    ds: xr.Dataset, metric_name: str, filter_mask: xr.DataArray = None, distribution: str | None = None
 ) -> xr.DataArray:
     """Applies the specified metric, handling the necessary masking."""
 
@@ -139,7 +139,7 @@ def _apply_simulation_metric(
 
 def calculate_metrics(
     ds_results: xr.Dataset | Path,
-    metric_name: list[str] = ["all"],
+    metric_name: list[str] | None = None,
     forecast_mode: bool = False,
     distribution=None,
     filter_mask: xr.DataArray = None,
@@ -151,7 +151,7 @@ def calculate_metrics(
     ----------
     ds_results : xr.Dataset | Path
         Dataset loaded from the evaluation Zarr.
-    metric_name : list[str]
+    metric_name : list[str] | None = None
         List of metric names to calculate, or ["all"] to run all valid metrics.
     forecast_mode : bool
         True if the dataset is from a forecast model (with lead_time dimension).
@@ -166,6 +166,9 @@ def calculate_metrics(
         DataArray containing the calculated metrics.
 
     """
+    if metric_name is None:
+        metric_name = ["all"]
+
     if isinstance(ds_results, Path):
         ds_results = xr.open_zarr(ds_results)
 
@@ -176,7 +179,7 @@ def calculate_metrics(
         else:
             requested_metrics = [m.lower() for m in metric_name]
     else:
-        raise ValueError(f"metric_name must be a list of strings. Got {type(metric_name)}")
+        raise TypeError(f"metric_name must be a list of strings. Got {type(metric_name)}")
 
     # Safety Check: See that we have all the necessary inputs for the requested metrics
     for m_name in requested_metrics:

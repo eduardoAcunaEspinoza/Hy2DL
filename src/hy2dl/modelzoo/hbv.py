@@ -1,5 +1,3 @@
-from typing import Optional
-
 import torch
 
 from hy2dl.modelzoo.baseconceptualmodel import BaseConceptualModel
@@ -37,7 +35,7 @@ class HBV(BaseConceptualModel):
         self,
         x_conceptual: dict[str, torch.Tensor],
         parameters: dict[str, torch.Tensor],
-        initial_states: Optional[dict[str, torch.Tensor]] = None,
+        initial_states: dict[str, torch.Tensor] | None = None,
     ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
         """Forward pass on the HBV model.
 
@@ -47,7 +45,7 @@ class HBV(BaseConceptualModel):
             dictionary with the different inputs as tensors of size [batch_size, time_steps].
         parameters: dict[str, torch.Tensor]
             dictionary with parameterization of conceptual model
-        initial_states: Optional[dict[str, torch.Tensor]]
+        initial_states: dict[str, torch.Tensor] | None
             Optional parameter! In case one wants to specify the initial state of the internal states of the conceptual
             model.
 

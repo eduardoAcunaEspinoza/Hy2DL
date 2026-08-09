@@ -1,5 +1,3 @@
-from typing import Optional
-
 import torch
 import torch.nn as nn
 
@@ -21,7 +19,7 @@ class BaseConceptualModel(nn.Module):
         self,
         x_conceptual: dict[str, torch.Tensor],
         parameters: dict[str, torch.Tensor],
-        initial_states: Optional[dict[str, torch.Tensor]] = None,
+        initial_states: dict[str, torch.Tensor] | None = None,
     ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
         raise NotImplementedError
 

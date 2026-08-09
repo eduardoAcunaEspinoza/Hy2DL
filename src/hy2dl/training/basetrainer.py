@@ -61,9 +61,9 @@ class BaseTrainer(object):
             if key.startswith(("x_d", "x_conceptual")):
                 self.cfg.logger.info(f"{key}")
                 for i, v in value.items():
-                    self.cfg.logger.info(f"{i:^30}|{str(v.shape):^30}")
+                    self.cfg.logger.info(f"{i:^30}|{v.shape!s:^30}")
             else:
-                self.cfg.logger.info(f"{key:<30}|{str(value.shape):^30}")
+                self.cfg.logger.info(f"{key:<30}|{value.shape!s:^30}")
 
         self.cfg.logger.info("")  # prints a blank line
 

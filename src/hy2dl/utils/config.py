@@ -3,7 +3,7 @@ import random
 import warnings
 from itertools import chain
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -92,9 +92,12 @@ class Config(object):
         if self.static_input is None and self.static_embedding is not None:
             raise ValueError("`static_embedding` requires specification of `static_input`")
 
-        if isinstance(self.dynamic_input, dict) and isinstance(self.custom_seq_processing, dict):
-            if set(self.dynamic_input.keys()) != set(self.custom_seq_processing.keys()):
-                raise ValueError("`dynamic_input` and `custom_seq_processing` must have the same keys.")
+        if (
+            isinstance(self.dynamic_input, dict)
+            and isinstance(self.custom_seq_processing, dict)
+            and set(self.dynamic_input.keys()) != set(self.custom_seq_processing.keys())
+        ):
+            raise ValueError("`dynamic_input` and `custom_seq_processing` must have the same keys.")
 
         if isinstance(self.nan_handling_method, str) and not has_embedding:
             raise ValueError("`dynamic_embedding` must be specified when using `nan_handling_method`")
@@ -253,7 +256,7 @@ class Config(object):
         """Check for specific configurations required by certain metrics."""
         from hy2dl.evaluation.registry import registry
 
-        is_forecast = False if self.forecast_signals == [] else True
+        is_forecast = bool(self.forecast_signals)
         is_probabilistic = self.distribution is not None
         requested_metrics = registry.get_available(forecast_mode=is_forecast, probabilistic=is_probabilistic)
 
@@ -324,7 +327,8 @@ class Config(object):
 
             if self.loss == "crps" and (self.distribution != "logistic" or self.num_mixture_components != 1):
                 raise ValueError(
-                    "`crps` loss is currently only supported for a single component (`num_mixture_components` =1) logistic distribution."
+                    "`crps` loss is currently only supported for a single component "
+                    "(`num_mixture_components` =1) logistic distribution."
                 )
 
     def _check_nan_settings_hc(self):
@@ -372,10 +376,8 @@ class Config(object):
             seq_length = sum(v["n_steps"] * v["freq_factor"] for v in self.custom_seq_processing.values())
             if seq_length != self.seq_length_hindcast:
                 raise ValueError(
-                    (
-                        f"seq_length_hindcast: {self.seq_length_hindcast} does not match the sum "
-                        f"of custom_seq_processing ({seq_length})."
-                    )
+                    f"seq_length_hindcast: {self.seq_length_hindcast} does not match the sum "
+                    f"of custom_seq_processing ({seq_length})."
                 )
 
     def _create_folder(self):
@@ -397,7 +399,7 @@ class Config(object):
         if not os.path.exists(self.path_save_folder / "model"):
             os.makedirs(self.path_save_folder / "model")
 
-    def _prepare_path(self, k: str) -> Optional[Path]:
+    def _prepare_path(self, k: str) -> Path | None:
         """Prepare a path from the configuration, ensuring it is a Path object and is absolute.
 
         Parameters
@@ -407,7 +409,7 @@ class Config(object):
 
         Returns
         -------
-        Optional[Path]
+        Path | None
             The absolute Path, or None if the path was not specified in the configuration.
 
         """
@@ -431,7 +433,7 @@ class Config(object):
         elif isinstance(yml_path_or_dict, dict):
             return yml_path_or_dict
         else:
-            raise ValueError("yml_path_or_dict must be a Path (path to YAML file) or a dictionary.")
+            raise TypeError("yml_path_or_dict must be a Path (path to YAML file) or a dictionary.")
 
     @staticmethod
     def _as_default_list(value: Any) -> list:
@@ -448,7 +450,7 @@ class Config(object):
         """Checks the config for unknown keys."""
         property_names = [p for p in dir(Config) if isinstance(getattr(Config, p), property)]
 
-        unknown_keys = [k for k in cfg.keys() if k not in property_names]
+        unknown_keys = [k for k in cfg if k not in property_names]
         if unknown_keys:
             raise ValueError(f"{unknown_keys} are not recognized config keys.")
 
@@ -520,15 +522,15 @@ class Config(object):
         return self._cfg.get("batch_size_evaluation", self.batch_size_training)
 
     @property
-    def conceptual_model(self) -> Optional[str]:
+    def conceptual_model(self) -> str | None:
         return self._cfg.get("conceptual_model")
 
     @property
-    def custom_scaler(self) -> Optional[dict[str, dict[str, float]]]:
+    def custom_scaler(self) -> dict[str, dict[str, float]] | None:
         return self._cfg.get("custom_scaler")
 
     @property
-    def custom_seq_processing(self) -> Optional[dict[str, dict[str, int]]]:
+    def custom_seq_processing(self) -> dict[str, dict[str, int]] | None:
         return self._cfg.get("custom_seq_processing")
 
     @property
@@ -560,7 +562,7 @@ class Config(object):
         return self._cfg.get("dropout_rate", 0.0)
 
     @property
-    def dynamic_embedding(self) -> Optional[dict[str, str | float | list[int]]]:
+    def dynamic_embedding(self) -> dict[str, str | float | list[int]] | None:
         embedding = self._cfg.get("dynamic_embedding")
         return None if embedding is None else Config._get_embedding_spec(embedding)
 
@@ -569,7 +571,7 @@ class Config(object):
         return self._cfg.get("dynamic_input")
 
     @property
-    def dynamic_input_conceptual_model(self) -> Optional[dict[str, str | list[str]]]:
+    def dynamic_input_conceptual_model(self) -> dict[str, str | list[str]] | None:
         return self._cfg.get("dynamic_input_conceptual_model")
 
     @property
@@ -590,7 +592,7 @@ class Config(object):
     @experiment_name.setter
     def experiment_name(self, value: str):
         if not isinstance(value, str):
-            raise ValueError("experiment_name must be a string.")
+            raise TypeError("experiment_name must be a string.")
         # Set a custom experiment name, this also determines the folder where results are stored
         self._cfg["experiment_name"] = value
 
@@ -599,7 +601,7 @@ class Config(object):
         return Config._as_default_list(self._cfg.get("forcings"))
 
     @property
-    def forecast_counter(self) -> Optional[bool]:
+    def forecast_counter(self) -> bool | None:
         return self._cfg.get("forecast_counter", False)
 
     @property
@@ -627,7 +629,7 @@ class Config(object):
         return self._cfg.get("initial_forget_bias", None)
 
     @property
-    def lagged_features(self) -> Optional[dict[str, int | list[int]]]:
+    def lagged_features(self) -> dict[str, int | list[int]] | None:
         return self._cfg.get("lagged_features")
 
     @property
@@ -647,11 +649,11 @@ class Config(object):
         return self._cfg.get("model").lower()
 
     @property
-    def nan_handling_method(self) -> Optional[str]:
+    def nan_handling_method(self) -> str | None:
         return self._cfg.get("nan_handling_method")
 
     @property
-    def nan_probability(self) -> Optional[dict[str, dict[str, float]]]:
+    def nan_probability(self) -> dict[str, dict[str, float]] | None:
         return self._cfg.get("nan_probability")
 
     @nan_probability.setter
@@ -667,7 +669,7 @@ class Config(object):
         self._cfg["nan_probabilistic_masking"] = value
 
     @property
-    def noise_level(self) -> Optional[float]:
+    def noise_level(self) -> float | None:
         return self._cfg.get("noise_level")
 
     @noise_level.setter
@@ -697,7 +699,7 @@ class Config(object):
         self._cfg["num_workers"] = value
 
     @property
-    def path_additional_features(self) -> Optional[Path]:
+    def path_additional_features(self) -> Path | None:
         return self._prepare_path("path_additional_features")
 
     @property
@@ -705,7 +707,7 @@ class Config(object):
         return self._prepare_path("path_data")
 
     @property
-    def path_dataset_testing(self) -> Optional[Path]:
+    def path_dataset_testing(self) -> Path | None:
         return self._prepare_path("path_dataset_testing")
 
     @path_dataset_testing.setter
@@ -713,7 +715,7 @@ class Config(object):
         self._cfg["path_dataset_testing"] = value
 
     @property
-    def path_dataset_training(self) -> Optional[Path]:
+    def path_dataset_training(self) -> Path | None:
         return self._prepare_path("path_dataset_training")
 
     @path_dataset_training.setter
@@ -721,7 +723,7 @@ class Config(object):
         self._cfg["path_dataset_training"] = value
 
     @property
-    def path_dataset_validation(self) -> Optional[Path]:
+    def path_dataset_validation(self) -> Path | None:
         return self._prepare_path("path_dataset_validation")
 
     @path_dataset_validation.setter
@@ -729,11 +731,11 @@ class Config(object):
         self._cfg["path_dataset_validation"] = value
 
     @property
-    def path_entities(self) -> Optional[Path]:
+    def path_entities(self) -> Path | None:
         return self._prepare_path("path_entities")
 
     @property
-    def path_entities_testing(self) -> Optional[Path]:
+    def path_entities_testing(self) -> Path | None:
         if self._cfg.get("path_entities_testing"):
             return self._prepare_path("path_entities_testing")
         return self.path_entities  # default to path_entities if not specified
@@ -743,7 +745,7 @@ class Config(object):
         self._cfg["path_entities_testing"] = value
 
     @property
-    def path_entities_training(self) -> Optional[Path]:
+    def path_entities_training(self) -> Path | None:
         if self._cfg.get("path_entities_training"):
             return self._prepare_path("path_entities_training")
         return self.path_entities  # default to path_entities if not specified
@@ -753,7 +755,7 @@ class Config(object):
         self._cfg["path_entities_training"] = value
 
     @property
-    def path_entities_validation(self) -> Optional[Path]:
+    def path_entities_validation(self) -> Path | None:
         if self._cfg.get("path_entities_validation"):
             return self._prepare_path("path_entities_validation")
         return self.path_entities  # default to path_entities if not specified
@@ -763,7 +765,7 @@ class Config(object):
         self._cfg["path_entities_validation"] = value
 
     @property
-    def path_forecast_dataset(self) -> Optional[Path]:
+    def path_forecast_dataset(self) -> Path | None:
         return self._prepare_path("path_forecast_dataset")
 
     @property
@@ -780,7 +782,7 @@ class Config(object):
         return (folder / suffix).resolve()
 
     @property
-    def path_save_zarr(self) -> Optional[Path]:
+    def path_save_zarr(self) -> Path | None:
         return self._prepare_path("path_save_zarr")
 
     @path_save_zarr.setter
@@ -788,7 +790,7 @@ class Config(object):
         self._cfg["path_save_zarr"] = value
 
     @property
-    def path_valid_samples_testing(self) -> Optional[Path]:
+    def path_valid_samples_testing(self) -> Path | None:
         return self._prepare_path("path_valid_samples_testing")
 
     @path_valid_samples_testing.setter
@@ -796,7 +798,7 @@ class Config(object):
         self._cfg["path_valid_samples_testing"] = value
 
     @property
-    def path_valid_samples_training(self) -> Optional[Path]:
+    def path_valid_samples_training(self) -> Path | None:
         return self._prepare_path("path_valid_samples_training")
 
     @path_valid_samples_training.setter
@@ -804,7 +806,7 @@ class Config(object):
         self._cfg["path_valid_samples_training"] = value
 
     @property
-    def path_valid_samples_validation(self) -> Optional[Path]:
+    def path_valid_samples_validation(self) -> Path | None:
         return self._prepare_path("path_valid_samples_validation")
 
     @path_valid_samples_validation.setter
@@ -854,11 +856,11 @@ class Config(object):
         self._cfg["random_seed"] = value
 
     @property
-    def routing_model(self) -> Optional[str]:
+    def routing_model(self) -> str | None:
         return self._cfg.get("routing_model")
 
     @property
-    def static_embedding(self) -> Optional[dict[str, str | float | list[int]]]:
+    def static_embedding(self) -> dict[str, str | float | list[int]] | None:
         embedding = self._cfg.get("static_embedding")
         return None if embedding is None else Config._get_embedding_spec(embedding)
 
@@ -883,11 +885,11 @@ class Config(object):
         return self._cfg.get("seq_length_forecast", 0)
 
     @property
-    def steplr_step_size(self) -> Optional[int]:
+    def steplr_step_size(self) -> int | None:
         return self._cfg.get("steplr_step_size")
 
     @property
-    def steplr_gamma(self) -> Optional[float]:
+    def steplr_gamma(self) -> float | None:
         return self._cfg.get("steplr_gamma")
 
     @property
@@ -897,10 +899,6 @@ class Config(object):
     @property
     def target_weights(self) -> list[float]:
         return self._cfg.get("target_weights")
-
-    @property
-    def teacher_forcing_scheduler(self) -> Optional[dict[str, float]]:
-        return self._cfg.get("teacher_forcing_scheduler")
 
     @property
     def testing_metrics(self) -> list[str]:

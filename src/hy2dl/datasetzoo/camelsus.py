@@ -1,6 +1,4 @@
 # import necessary packages
-from typing import Optional, Tuple
-
 import numpy as np
 import pandas as pd
 
@@ -22,7 +20,7 @@ class CAMELS_US(BaseDataset):
         Configuration file.
     time_period : {'training', 'validation', 'testing'}
         Defines the period for which the data will be loaded.
-    gauge_id : Optional[str | list[str]], default=None
+    gauge_id : str | list[str] | None, default=None
         Id of gauge(s) to be loaded.
 
 
@@ -45,7 +43,7 @@ class CAMELS_US(BaseDataset):
         self,
         cfg: Config,
         time_period: str,
-        gauge_id: Optional[str | list[str]] = None,
+        gauge_id: str | list[str] | None = None,
     ):
         # Run the __init__ method of BaseDataset class, where the data is processed
         super(CAMELS_US, self).__init__(cfg=cfg, time_period=time_period, gauge_id=gauge_id)
@@ -123,7 +121,7 @@ class CAMELS_US(BaseDataset):
 
         return df
 
-    def _load_camelsus_data(self, gauge_id: str, forcing: str) -> Tuple[pd.DataFrame, int]:
+    def _load_camelsus_data(self, gauge_id: str, forcing: str) -> tuple[pd.DataFrame, int]:
         """Read a specific catchment forcing timeseries
 
         Parameters

@@ -17,11 +17,11 @@ def upload_to_device(sample: dict, device):
         Dictionary with the different tensors that will be used for the forward pass.
 
     """
-    for key in sample.keys():
-        if isinstance(sample[key], dict) and key.startswith(("x_d", "x_ar", "x_conceptual")):
-            sample[key] = {k: v.to(device) for k, v in sample[key].items()}
-        elif isinstance(sample[key], torch.Tensor):
-            sample[key] = sample[key].to(device)
+    for k, v in sample.items():
+        if isinstance(v, dict) and k.startswith(("x_d", "x_conceptual")):
+            sample[k] = {k: v.to(device) for k, v in v.items()}
+        elif isinstance(v, torch.Tensor):
+            sample[k] = v.to(device)
     return sample
 
 

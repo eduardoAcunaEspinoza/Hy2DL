@@ -1,6 +1,7 @@
+import math
+
 import torch
 import xarray as xr
-import math
 
 from hy2dl.evaluation.registry import registry
 from hy2dl.utils import get_distribution
@@ -59,8 +60,9 @@ def nll(dist: str, obs: xr.DataArray, sim: xr.DataArray, mdn_weight: xr.DataArra
 
     return nll_da.mean(dim="date", skipna=True)
 
+
 @registry.register("crps", is_probabilistic=True)
-def crps(dist: str, obs: xr.DataArray, sim: xr.DataArray,  mdn_weight: xr.DataArray,  **kwargs) -> xr.DataArray:
+def crps(dist: str, obs: xr.DataArray, sim: xr.DataArray, mdn_weight: xr.DataArray, **kwargs) -> xr.DataArray:
     distribution = get_distribution(dist)
     params_xr = {k: kwargs[k] for k in distribution.parameters}
 

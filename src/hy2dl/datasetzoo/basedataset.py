@@ -2,7 +2,7 @@ import datetime
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import dask
 import numpy as np
@@ -33,7 +33,7 @@ class BaseDataset(Dataset):
         Configuration file.
     time_period : {'training', 'validation', 'testing'}
         Defines the period for which the data will be loaded.
-    gauge_id : Optional[str | list[str]], default=None
+    gauge_id : str | list[str] | None, default=None
         Id of gauge(s) to be loaded.
 
     """
@@ -42,7 +42,7 @@ class BaseDataset(Dataset):
         self,
         cfg: Config,
         time_period: str,
-        gauge_id: Optional[str | list[str]] = None,
+        gauge_id: str | list[str] | None = None,
     ):
         # Store configuration file
         self.cfg = cfg
@@ -149,7 +149,7 @@ class BaseDataset(Dataset):
         elif isinstance(idx, list):
             indices = idx
         else:
-            raise ValueError(f"Invalid index type: {type(idx)}. Expected int or list of ints.")
+            raise TypeError(f"Invalid index type: {type(idx)}. Expected int or list of ints.")
         return self.__getitems__(indices)
 
     def __getitems__(self, indices: list[int]) -> dict[str, Any]:
@@ -174,22 +174,22 @@ class BaseDataset(Dataset):
                 (B, L).In case of multiple frequencies, one dictionary per frequency is created.
             - y_obs: torch.Tensor, shape (B, N, T)
                 Target variables.
-            - x_s: Optional[torch.Tensor], shape (B, NS)
+            - x_s: torch.Tensor | None, shape (B, NS)
                 Static inputs.
-            - x_d_fc: Optional[dict[str, torch.Tensor]]
+            - x_d_fc: dict[str, torch.Tensor] | None
                 Dynamic inputs in forecast period. Keys are the variable names and the values are tensors of shape
                 (B, LF).
-            - source_fc: Optional[np.ndarray], shape (B,)
+            - source_fc: np.ndarray | None, shape (B,)
                 String array to differentiate the source of forecast signals: pseudoforecast ("obs") or forecast ("fc").
-            - init_time_fc: Optional[np.ndarray], shape (B,)
+            - init_time_fc: np.ndarray | None, shape (B,)
                 Time where the forecast is emitted.
-            - persistent_q: Optional[torch.Tensor], shape (B, 1, T)
+            - persistent_q: torch.Tensor | None, shape (B, 1, T)
                 Target at the time the forecast is emitted.
             - gauge_id: np.ndarray, shape (B,)
                 ID of the gauge for each element of the batch.
             - date: np.ndarray, shape (B, L)
                 Dates associated with the target.
-            - std_basin: Optional[torch.Tensor], shape (B, T)
+            - std_basin: torch.Tensor | None, shape (B, T)
                 Standard deviation of target variables for the training period. Necessary if one uses basin-averaged NSE
                 as a loss function.
 
@@ -229,7 +229,7 @@ class BaseDataset(Dataset):
             id_idx: np.ndarray,
             start_t_indices: np.ndarray,
             length: int,
-            freq_factor: Optional[int] = None,
+            freq_factor: int | None = None,
             as_dict: bool = True,
         ) -> dict[str, torch.Tensor] | torch.Tensor:
             """Helper function to extract a block (Batch, Sequence, Features) from dataset.
@@ -244,7 +244,7 @@ class BaseDataset(Dataset):
                 Starting index of each batch element
             length: int
                 Length of the sequence.
-            freq_factor: Optional[int], default=None
+            freq_factor: int | None, default=None
                 If provided, the sequence wil averaged over the frequency factor
             as_dict: bool, default=True
                 Whether to return the result as a dictionary (with variable names as keys) or as a tensor
@@ -502,7 +502,7 @@ class BaseDataset(Dataset):
 
         return sample
 
-    def setup_dataset(self, check_nan=True, path_scaler: Optional[Path | str] = None):
+    def setup_dataset(self, check_nan=True, path_scaler: Path | str | None = None):
         """Get data ready for training or evaluation.
 
         This is the function you should call to load and process the dataset, and get it ready for use. It processes,
@@ -536,7 +536,7 @@ class BaseDataset(Dataset):
         ----------
         check_nan : bool, default=True
             Check for nan values during `validate_samples`.
-        path_scaler : Path or str, optional
+        path_scaler : Path | str | None
             Path to saved `scaler.yml` file.
 
         """
@@ -635,7 +635,7 @@ class BaseDataset(Dataset):
             elif isinstance(shift, int):
                 df[f"{feature}_shift{shift}"] = df[feature].shift(periods=shift)
             else:
-                raise ValueError("The value of the 'lagged_features' arg must be either an int or a list of ints")
+                raise TypeError("The value of the 'lagged_features' arg must be either an int or a list of ints")
 
         return df
 
@@ -735,7 +735,7 @@ class BaseDataset(Dataset):
         if self.cfg.custom_scaler is not None:  # custom_scaler: {'var_name': {'mean': #, 'std': #}}
             for group_key, variables in scaler.items():
                 stat_type = group_key.split("_")[-1]
-                for var_name in variables.keys():
+                for var_name in variables:
                     if var_name in self.cfg.custom_scaler and stat_type in self.cfg.custom_scaler[var_name]:
                         # Override the calculated value with the custom value
                         scaler[group_key][var_name] = self.cfg.custom_scaler[var_name][stat_type]
@@ -809,7 +809,7 @@ class BaseDataset(Dataset):
             )
             return False
 
-    def _create_dataset(self, save_path: Path = None):
+    def _create_dataset(self, save_path: Path | None = None):
         """Creates the dataset and keeps it in memory.
 
         The function reads and process the data, for each entity (e.g., catchment), and store the results as an
@@ -827,7 +827,7 @@ class BaseDataset(Dataset):
 
         Parameters
         ----------
-        save_path: Path, optional
+        save_path: Path | None
             If provided, the dataset will be saved to this path in zarr format.
 
         """
@@ -1321,15 +1321,15 @@ class BaseDataset(Dataset):
             ) / self.scaler_attributes.sel(statistic="std")
             self.cfg.logger.info("Static attributes were successfully standardized.")
 
-    def _validate_samples(self, check_nan: bool = True, save_path: Path = None):
+    def _validate_samples(self, check_nan: bool = True, save_path: Path | None = None):
         """Function to construct the valid samples table.
 
         Parameters
         ----------
-        check_nan : Optional[bool], default=True
+        check_nan : bool, default=True
             Whether to check for NaN values while processing the data. This should typically be True during training,
             and can be set to False during evaluation (validation/testing).
-        save_path: Optional[Path], default=None
+        save_path: Path | None, default=None
             If provided, the valid samples will be saved as a csv file in this path.
 
         """
@@ -1388,7 +1388,7 @@ class BaseDataset(Dataset):
 
         Parameters
         ----------
-        check_nan : Optional[bool], default=True
+        check_nan : bool, default=True
             Whether to check for NaN values while processing the data. This should be True during training,
             and can be set to False during evaluation (validation/testing).
 

@@ -1,5 +1,5 @@
 from itertools import chain
-from typing import Any, Optional
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -419,7 +419,7 @@ class InputLayer(nn.Module):
         return dict(zip(self.cfg.nan_probability.keys(), drop_group.T, strict=True))
 
     @staticmethod
-    def build_embedding(input_dim: int, embedding: Optional[dict[str, str | float | list[int]]]):
+    def build_embedding(input_dim: int, embedding: dict[str, str | float | list[int]] | None):
         """Build embedding
 
         Parameters
