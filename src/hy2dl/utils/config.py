@@ -279,16 +279,13 @@ class Config(object):
 
     def _check_models(self):
         """Check for specific configurations required by certain models."""
-        model_name = self.model.lower()
-        head_name = self.head.lower()
-
-        if model_name == "hybrid" and (self.conceptual_model is None or self.dynamic_input_conceptual_model is None):
+        if self.model == "hybrid" and (self.conceptual_model is None or self.dynamic_input_conceptual_model is None):
             raise ValueError(
                 "`hybrid` model requires `conceptual_model` and `dynamic_input_conceptual_model` to be specified."
             )
 
         # Depreciation warning for `lstmmdn` model
-        if model_name == "lstmmdn":
+        if self.model == "lstmmdn":
             warnings.warn(
                 "`lstmmdn` model is deprecated and will be removed in future versions. "
                 "Please use `cudalstm` with `mdn` head instead.",
@@ -297,7 +294,6 @@ class Config(object):
             )
             self._cfg["model"] = "cudalstm"
             self._cfg["head"] = "mdn"
-            model_name, head_name = "cudalstm", "mdn"
 
         # Check models and head
         from hy2dl.modelzoo import get_head_registry, get_model_registry
@@ -305,15 +301,15 @@ class Config(object):
         model_registry = get_model_registry()
         head_registry = get_head_registry()
 
-        if model_name not in model_registry:
+        if self.model not in model_registry:
             available_models = list(model_registry.keys())
-            raise NotImplementedError(f"'{model_name}' not implemented. Available models: {available_models}")
-        if head_name not in head_registry:
+            raise NotImplementedError(f"'{self.model}' not implemented. Available models: {available_models}")
+        if self.head not in head_registry:
             available_heads = list(head_registry.keys())
-            raise NotImplementedError(f"'{head_name}' not implemented. Available heads: {available_heads}")
+            raise NotImplementedError(f"'{self.head}' not implemented. Available heads: {available_heads}")
 
         # Check for specific configurations required by certain heads
-        if head_name == "mdn":
+        if self.head == "mdn":
             from hy2dl.utils import get_distribution_registry
 
             distribution_registry = get_distribution_registry()
@@ -325,6 +321,11 @@ class Config(object):
                 )
             if self.num_mixture_components is None:
                 raise ValueError("`mdn` head requires `num_mixture_components` to be specified.")
+
+            if self.loss == "crps" and (self.distribution != "logistic" or self.num_mixture_components != 1):
+                raise ValueError(
+                    "`crps` loss is currently only supported for a single component (`num_mixture_components` =1) logistic distribution."
+                )
 
     def _check_nan_settings_hc(self):
         """Check hindcast settings when working with nan handling methods"""
@@ -552,7 +553,7 @@ class Config(object):
 
     @property
     def distribution(self) -> str:
-        return self._cfg.get("distribution")
+        return self._cfg.get("distribution").lower()
 
     @property
     def dropout_rate(self) -> float:
@@ -615,7 +616,7 @@ class Config(object):
 
     @property
     def head(self) -> str:
-        return self._cfg.get("head", "regression")
+        return self._cfg.get("head", "regression").lower()
 
     @property
     def hidden_size(self) -> int:
@@ -643,7 +644,7 @@ class Config(object):
 
     @property
     def model(self) -> str:
-        return self._cfg.get("model")
+        return self._cfg.get("model").lower()
 
     @property
     def nan_handling_method(self) -> Optional[str]:
