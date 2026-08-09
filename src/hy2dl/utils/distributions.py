@@ -488,3 +488,147 @@ class AsymmetricLaplaceMixture(BaseDistribution):
     @property
     def parameters(self) -> tuple[str]:
         return ("loc", "scale", "kappa")
+
+class LogisticMixture(BaseDistribution):
+    """Logistic mixture distribution."""
+
+    def backtransform_parameters(
+        self,
+        params: dict[str, torch.Tensor],
+        target_scaler: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+
+        mean_data = target_scaler["mean"].view(1, 1, 1, -1)
+        std_data = target_scaler["std"].view(1, 1, 1, -1)
+
+        return {
+            "loc": params["loc"] * std_data + mean_data,
+            "scale": params["scale"] * std_data,
+        }
+
+    def calc_cdf(
+        self,
+        params: dict[str, torch.Tensor],
+        weights: torch.Tensor,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+
+        x = x.unsqueeze(-2)  # [B,N,1,T]
+
+        loc = params["loc"]
+        scale = torch.clamp(params["scale"], min=1e-6)
+
+        z = (x - loc) / scale
+        cdf = torch.sigmoid(z)
+
+        cdf = (weights * cdf).sum(dim=-2)  # [B,N,T]
+
+        return cdf
+
+    def calc_logpdf(
+        self,
+        params: dict[str, torch.Tensor],
+        weights: torch.Tensor,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+
+        x = x.unsqueeze(-2)  # [B,N,1,T]
+
+        loc = params["loc"]
+        scale = torch.clamp(params["scale"], min=1e-6)
+
+        z = (x - loc) / scale
+
+        # Stable log-pdf:
+        # log f(x) = -z - 2*softplus(-z) - log(scale)
+
+        log_p = -z - 2 * F.softplus(-z) - torch.log(scale)
+
+        log_w = torch.log(torch.clamp(weights, min=1e-10))
+
+        log_p = torch.logsumexp(log_p + log_w, dim=-2)
+
+        return log_p
+
+    def calc_crps(
+        self,
+        params: dict[str, torch.Tensor],
+        weights: torch.Tensor,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+
+        x = x.unsqueeze(-2)  # [B,N,1,T]
+
+        loc = params["loc"]
+        scale = torch.clamp(params["scale"], min=1e-6)
+
+        z = (x - loc) / scale
+        
+        crps = scale * (z - 2 * F.logsigmoid(z) - 1)
+        
+        return crps.squeeze(2)
+
+    def map_parameters(
+        self,
+        raw_params: torch.Tensor,
+        num_mixture_components: int,
+        num_targets: int,
+    ) -> dict[str, torch.Tensor]:
+
+        loc, scale = raw_params.chunk(2, dim=-1)
+
+        params = {
+            "loc": loc,
+            "scale": F.softplus(scale),
+        }
+
+        params = self._reshape_params(
+            params=params,
+            num_mixture_components=num_mixture_components,
+            num_targets=num_targets,
+        )
+
+        return params
+
+    def mean(
+        self,
+        params: dict[str, torch.Tensor],
+        weights: torch.Tensor,
+    ) -> torch.Tensor:
+
+        # Mean of Logistic(loc, scale) = loc
+
+        mean = params["loc"]
+        mean = (mean * weights).sum(dim=-2)
+
+        return mean
+
+    def sample(
+        self,
+        params: dict[str, torch.Tensor],
+        weights: torch.Tensor,
+        num_samples: int,
+    ) -> torch.Tensor:
+
+        loc = params["loc"]
+        scale = params["scale"]
+
+        B, N, K, T = loc.shape
+        S = num_samples
+
+        # Inverse-CDF sampling
+
+        u = torch.rand(B, N, K, S, T, device=loc.device)
+        u = torch.clamp(u, min=1e-8, max=1 - 1e-8)
+
+        samples = torch.log(u / (1 - u))
+
+        samples = samples * scale.unsqueeze(-2) + loc.unsqueeze(-2)
+
+        samples = self._sample_from_mixture(samples, weights)
+
+        return samples
+
+    @property
+    def parameters(self) -> tuple[str]:
+        return ("loc", "scale")

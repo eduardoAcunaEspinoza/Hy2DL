@@ -1,5 +1,4 @@
 # import necessary packages
-from collections import defaultdict
 from typing import Optional
 
 import pandas as pd
