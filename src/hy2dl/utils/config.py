@@ -555,7 +555,7 @@ class Config(object):
 
     @property
     def distribution(self) -> str:
-        return self._cfg.get("distribution").lower()
+        return self._cfg.get("distribution")
 
     @property
     def dropout_rate(self) -> float:
