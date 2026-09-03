@@ -6,8 +6,9 @@ from hy2dl.utils.config import Config
 def get_model_registry():
     from hy2dl.modelzoo.cudalstm import CudaLSTM
     from hy2dl.modelzoo.hybrid import Hybrid
+    from hy2dl.modelzoo.mf2lstm import MF2LSTM
 
-    return {"cudalstm": CudaLSTM, "hybrid": Hybrid}
+    return {"cudalstm": CudaLSTM, "hybrid": Hybrid, "mf2lstm": MF2LSTM}
 
 
 def get_head_registry():

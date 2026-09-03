@@ -8,6 +8,7 @@ The following section gives an overview of the implemented models and their poss
    :caption: Modelzoo
 
    modelzoo/cudalstm
+   modelzoo/mf2lstm
    modelzoo/head
    modelzoo/hybrid
    

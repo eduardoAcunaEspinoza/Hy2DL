@@ -20,7 +20,9 @@ Standard case
       :align: center
 
       LSTM sequence-to-sequence. In the case ilustrated here, ``predict_last_n = 3``
-      
+
+.. _multi_frequency_reference:
+
 Multi-frequency
 -----------------
    By modifying configuration arguments, multiple temporal resolutions (e.g. hourly and daily) can be processed. Depending on the amount of inputs per frequency, different embeddings can be used to map the inputs to a common shared dimension. Details of the configuration arguments related to this model can be found in :ref:`mf_reference` and :ref:`emb_reference`.
@@ -39,9 +41,11 @@ Multi-frequency
 
    Configuration files for multi-frequency approaches can be found in the examples folder in the GitHub repository. For further details of the architecture see: `Acuna Espinoza et al. (2025b) <https://doi.org/10.5194/hess-29-1749-2025>`_. 
 
+.. _forecast_reference:
+
 Forecast LSTM
 -----------------
-   By modifying configuration arguments, the LSTM cell rolls out continuously through both the hindcast and forecast periods, using specific embedding layers for each case. Details of the configuration arguments related to this model can be found in :ref:`fc_reference` and :ref:`emb_reference`.
+   By modifying configuration arguments, the LSTM cell rolls out `sequentialy <https://doi.org/10.5194/egusphere-2026-2283>`_ through both the hindcast and forecast periods, using specific embedding layers for each case. Details of the configuration arguments related to this model can be found in :ref:`fc_reference` and :ref:`emb_reference`.
 
    .. figure:: ../../_static/fc_lstm.png
       :alt: Forecast LSTM architecture
@@ -62,6 +66,8 @@ MDN LSTM
       LSTM with mix density network output layer.
 
    Configuration files for MDN approaches can be found in the examples folder in the GitHub repository. For further details of the architecture see: `Klotz et al. (2022) <https://doi.org/10.5194/hess-26-1673-2022>`_.
+
+.. _masked_mean_reference:
 
 Nan-handling LSTM
 -----------------

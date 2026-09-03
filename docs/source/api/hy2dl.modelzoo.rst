@@ -10,6 +10,7 @@ hy2dl.modelzoo
    :maxdepth: 4
 
    hy2dl.modelzoo.cudalstm
+   hy2dl.modelzoo.mf2lstm
    hy2dl.modelzoo.hybrid
    hy2dl.modelzoo.inputlayer
    hy2dl.modelzoo.head

@@ -7,7 +7,7 @@ This page lists all available configuration arguments and their descriptions.
 Examples of configuration files are available in the /examples folder of the GitHub repository.
 
 Experiment configuration
----------------------------------
+--------------------------------------------------
 
 - ``device`` (str): 
     Name of the device to be used for training. Can be either "cpu", "gpu" or "cuda:#", where # is the GPU id.
@@ -37,7 +37,7 @@ Experiment configuration
     Initial and final date of the validation period. It should be consistent with the resolution of the data.
 
 Data settings
------------------------------
+--------------------------------------------------
 
 - ``dataset`` (str): 
     Name of the dataset to be used. Current options are: "camels_us", "camels_gb", "camels_de", "caravan", "hourly_camels_us", "hourly_camels_de".
@@ -147,7 +147,7 @@ Data settings
     Target variable that will be used to train the model
 
 Training settings
------------------------------
+--------------------------------------------------
 
 - ``batch_size_training`` (int): 
     Batch size used during training.
@@ -211,7 +211,7 @@ Training settings
     If True, the training data is divided into unique prediction blocks (no overlap between training blocks). Default is False.
 
 Evaluation settings
------------------------------
+--------------------------------------------------
 
 - ``validate_every`` (str):
     Number of epochs after which the model will be validated. Default is 1.
@@ -223,7 +223,7 @@ Evaluation settings
     Metric calculated during testing. Default is ``all``, meaning the model select all available metrics based on the configuration arguments.
 
 Model configuration
------------------------------
+--------------------------------------------------
 
 - ``model`` (str):
     Name of the model to use. Currently implemented: "cudalstm", "lstmmdn".
@@ -237,7 +237,7 @@ Model configuration
 .. _emb_reference:
 
 Embedding networks
------------------------------
+--------------------------------------------------
 
 - ``dynamic_embedding`` (dict[str, str | float | list[int]]): 
     Configuration for dynamic embedding layers. Specify as a dictionary with the keys:
@@ -264,7 +264,7 @@ Embedding networks
 .. _nan_reference:
 
 Nan-handling strategies
------------------------------
+--------------------------------------------------
 
 - ``nan_handling_method`` (str):
     Method to handle NaN values in the input data. To use this argument, groups of variables need to be defined in ``dynamic_input``. 
@@ -292,7 +292,7 @@ Nan-handling strategies
 .. _mf_reference:
 
 Multi-frequency LSTM (MF-LSTM)
---------------------------------
+--------------------------------------------------
 
 - ``custom_seq_processing`` (dict[str, dict[str, int]]):
     Dictionary specifying how to process the input sequences for each frequency. The keys are the frequency names (e.g., "1D", "1h"), and the values are dictionaries with the following keys:
@@ -320,7 +320,7 @@ Multi-frequency LSTM (MF-LSTM)
 .. _fc_reference:
 
 Forecast model
------------------------------
+--------------------------------------------------
 
 - ``forecast_input`` (list[str] | dict[str, list[str]]):
     Input list or dictionary specifying the variables used as forecast inputs. Forecast input are read from ``path_forecast_dataset``. In case pseudo_forecast (e.g. observed variables used 
@@ -356,10 +356,25 @@ Forecast model
 - ``seq_length_forecast`` (int):
     Length of the input sequence for forecast period.
 
+.. _mf2lstm_reference:
+
+Multi-frequency masked-forecasting LSTM (MF2LSTM)
+--------------------------------------------------
+
+- ``ar_teacher_forcing`` (bool):
+    Boolean specifying whether to use teacher-forcing during training for the forecast period.
+    If True, observed targets are fed into subsequent timesteps instead of the predictions from previous timesteps.
+    This significantly speeds up training by allowing the combined sequence (hindcast and forecast) to be routed directly
+    into PyTorch's CUDA-optimized LSTM module. Default is True.
+
+- ``pseudo_forecast_ar_input`` (list[str]):
+    Autoregressive input variables used during the forecast period. This must be defined even when running a real-forecast setup,
+    as the first timestep of the forecast horizon ingests the last available autoregressive input from the end of the hindcast period.
+
 .. _mdn_reference:
 
 Mixture Density Network
------------------------------
+--------------------------------------------------
 - ``head`` (str):
     Name of the head layer to be used after the LSTM. Use "mdn" for a Mixture Density Network. Default is "regression".
 
@@ -367,12 +382,12 @@ Mixture Density Network
     Number of mixture components in the Mixture Density Network (MDN).
 
 - ``distribution`` (str):
-    Probability distribution used in the MDN. Currently implemented are "gaussian" for gaussian and "laplace" for asymmetric laplacian.
+    Probability distribution used in the MDN. Currently implemented are "gaussian" for gaussian and "laplace" for asymmetric laplacian and "logistic" for logistic.
 
 .. _hybrid_reference:
 
 Hybrid model
------------------------------
+--------------------------------------------------
 - ``conceptual_model`` (str):
     Name of the hydrological conceptual model that is used together with a data-driven method to create the hybrid model. 
     Currently implemented: "shm", "linear_reservoir", "nonsense", "hbv".
@@ -402,7 +417,7 @@ Hybrid model
     Name of the additional routing model that will be used after the conceptual model. Currently only "uh_routing" is available, where a unit hydrograph based on the gamma function is used.
 
 CAMELS US specific
------------------------
+--------------------------------------------------
 
 - ``forcings`` (list[str]):
     Name of forcing product from CAMELS US dataset that will be included. Available products are: "daymet", "nldas", "maurer",
