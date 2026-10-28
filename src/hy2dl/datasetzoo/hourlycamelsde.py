@@ -54,8 +54,8 @@ class Hourly_CAMELS_DE(CAMELS_DE):
 
     def _fill_precipitation_gaps(self, df):
         """
-        CAMELS-DE-1h already contains gap-filled precipitation data, instead of using the entirely gap-filled data, we could
-        also fill the gaps with different strategies, e.g. based on gap length.
+        CAMELS-DE-1h already contains gap-filled precipitation data, instead of using the entirely gap-filled data, we
+        could also fill the gaps with different strategies, e.g. based on gap length.
 
         Parameters
         ----------
@@ -68,5 +68,6 @@ class Hourly_CAMELS_DE(CAMELS_DE):
             Dataframe with the catchments` timeseries with the gaps filled
         """
         raise NotImplementedError(
-            "This method is not implemented yet. Would be possible to fill gaps with different strategies, e.g. based on gap length."
+            "This method is not implemented yet. Would be possible to fill gaps with different strategies, e.g. based"
+            "on gap length."
         )

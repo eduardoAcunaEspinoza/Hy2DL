@@ -1,7 +1,6 @@
 import os
 import random
 import warnings
-from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -123,7 +122,7 @@ class Config(object):
 
         # If we have both
         if pfi and fi:
-            if type(pfi) != type(fi):  # need to be the same type
+            if not isinstance(pfi, type(fi)):  # need to be the same type
                 raise ValueError(" `pseudo_forecast_input` and `forecast_input` must be of the same type")
 
             if isinstance(pfi, list) and isinstance(fi, list) and len(pfi) != len(fi):

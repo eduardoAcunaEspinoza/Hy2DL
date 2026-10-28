@@ -1,5 +1,3 @@
-import math
-
 import torch
 import xarray as xr
 

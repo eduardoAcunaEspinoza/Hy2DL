@@ -9,12 +9,12 @@ import numpy as np
 import pandas as pd
 import psutil
 import torch
-from threadpoolctl import threadpool_limits
 import xarray as xr
 import xarray_tensorstore
 import yaml
 import zarr
 from dask.distributed import Client, LocalCluster, as_completed
+from threadpoolctl import threadpool_limits
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from tqdm.dask import TqdmCallback
@@ -326,7 +326,7 @@ class BaseDataset(Dataset):
                         key=k,
                     )
                 return
-            
+
             # Autoregressive input
             if key == self.cfg.ar_group_name and o_idx is not None:
                 obs_values = obs_slice[:, :, o_idx]
@@ -770,7 +770,6 @@ class BaseDataset(Dataset):
             self.feature_group_indices["x_d_fc_fc"] = _idx_mapping(
                 self.cfg.extended_forecast_signals_fc, self.feature_to_idx.get("fc", {})
             )
-
 
     def _create_dataset(self, save_path: Path | None = None):
         """Creates the dataset and keeps it in memory.

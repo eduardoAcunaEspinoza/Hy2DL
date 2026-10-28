@@ -15,8 +15,8 @@ class CudaLSTM(nn.Module):
     This class implements Pytorch's cuda-optimized LSTM model (nn.LSTM).
 
     The LSTM layer can operate either in a standard mode (hindcast only) or forecast mode. In forecast mode, the model
-    implementes a sequential-forecast framework [1]_ rolling continuously through both the hindcast and forecast periods,
-    using specific embedding layers for each case .
+    implementes a sequential-forecast framework [1]_ rolling continuously through both the hindcast and forecast
+    periods, using specific embedding layers for each case .
 
     Parameters
     ----------
@@ -90,7 +90,8 @@ class CudaLSTM(nn.Module):
 
         # Data for forecast period, if specified
         if self.forecast_mode:
-            x_fc = self.emb_fc(sample)
+            group_mask = getattr(self.emb_hc, "group_mask", None)
+            x_fc = self.emb_fc(sample, group_mask=group_mask)
             x_lstm = torch.cat((x_lstm, x_fc), dim=1)
             x_lstm = self.fc_counter(x_lstm)
 
