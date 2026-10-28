@@ -44,6 +44,7 @@ class BaseTrainer(object):
             batch_size=self.cfg.batch_size_training,
             shuffle=True,
             drop_last=True,
+            pin_memory=True,
             num_workers=self.cfg.num_workers,
             collate_fn=training_dataset.collate_fn,
             worker_init_fn=training_dataset.dask_worker_init_fn,
@@ -56,16 +57,28 @@ class BaseTrainer(object):
         self.cfg.logger.info("Details training dataloader".center(60, "-"))
         self.cfg.logger.info(f"Batch structure (number of batches: {len(self.train_loader)})")
         self.cfg.logger.info(f"{'Key':^30}|{'Shape':^30}")
-        # Loop through the sample dictionary and print the shape of each element
-        for key, value in next(iter(self.train_loader)).items():
-            if key.startswith(("x_d", "x_conceptual")):
-                self.cfg.logger.info(f"{key}")
-                for i, v in value.items():
-                    self.cfg.logger.info(f"{i:^30}|{v.shape!s:^30}")
-            else:
-                self.cfg.logger.info(f"{key:<30}|{value.shape!s:^30}")
 
-        self.cfg.logger.info("")  # prints a blank line
+        # Auxiliary printing function
+        def _log_item(name: str, val: Any, indent: int = 0):
+            prefix = "  " * indent
+            display_name = f"{prefix}{name}"
+
+            if isinstance(val, dict):
+                self.cfg.logger.info(f"{display_name:<30}|{'':^30}")
+                for sub_key, sub_val in val.items():
+                    _log_item(sub_key, sub_val, indent=indent + 1)
+            elif hasattr(val, "shape"):
+                self.cfg.logger.info(f"{display_name:<30}|{str(val.shape):^30}")
+            elif val is None:
+                self.cfg.logger.info(f"{display_name:<30}|{'None':^30}")
+            else:
+                self.cfg.logger.info(f"{display_name:<30}|{type(val).__name__:^30}")
+
+        # Load sample and print structure
+        sample = next(iter(self.train_loader))
+        for key, value in sample.items():
+            _log_item(key, value)
+        self.cfg.logger.info("")
 
     def train_model(self, epoch):
         self.model.train()
@@ -112,17 +125,15 @@ class BaseTrainer(object):
         torch.save(self.model.state_dict(), self.cfg.path_save_folder / "model" / f"model_epoch_{epoch}")
 
     def _inject_noise(self, sample: dict[str, Any], noise_level: float) -> dict[str, Any]:
-        """Noise injection"""
+        def _add_noise(v):
+            if isinstance(v, torch.Tensor):
+                return v * (1.0 + torch.randn_like(v) * noise_level)
+            elif isinstance(v, dict):
+                return {k: _add_noise(val) for k, val in v.items()}
+            return v
 
-        # Apply noise to target variable
         sample["y_obs"] = sample["y_obs"] * (1.0 + torch.randn_like(sample["y_obs"]) * noise_level)
-
-        # Apply noise to dynamic features
         for key, value in sample.items():
             if key.startswith("x_d"):
-                var_names = list(value.keys())
-                x_d_stacked = torch.stack(list(value.values()), dim=-1)
-                x_d_stacked = x_d_stacked * (1.0 + torch.randn_like(x_d_stacked) * noise_level)
-                sample[key] = dict(zip(var_names, x_d_stacked.unbind(dim=-1), strict=True))
-
+                sample[key] = _add_noise(value)
         return sample

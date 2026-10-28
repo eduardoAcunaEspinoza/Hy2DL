@@ -13,4 +13,5 @@ hy2dl.modelzoo
    hy2dl.modelzoo.mf2lstm
    hy2dl.modelzoo.hybrid
    hy2dl.modelzoo.inputlayer
+   hy2dl.modelzoo.forecast_counter
    hy2dl.modelzoo.head

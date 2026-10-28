@@ -137,8 +137,7 @@ class BaseTester(object):
             Model to evaluate.
         epoch : int
             Current epoch number.
-        forecast_mode : bool
-         filter_mask : xr.DataArray | None
+        filter_mask : xr.DataArray | None
             Boolean DataArray to filter values during evaluation. Expected dimensions (gauge_id, date).
 
         """

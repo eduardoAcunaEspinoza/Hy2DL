@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 
 from hy2dl.modelzoo import get_head
+from hy2dl.modelzoo.forecast_counter import ForecastCounter
 from hy2dl.modelzoo.inputlayer import InputLayer
 from hy2dl.utils.config import Config
 
@@ -37,25 +38,16 @@ class CudaLSTM(nn.Module):
         self.emb_hc = InputLayer(cfg)
 
         # Configurations from forecast period, if neccesary
-        self.forecast_mode = False
-        self.forecast_counter = 0
+        self.forecast_mode, add_channels = False, 0
         if cfg.forecast_signals:
             self.forecast_mode = True
-            self.emb_fc = InputLayer(cfg, embedding_type="forecast")
-
-            if cfg.forecast_counter:
-                self.forecast_counter = 1
-                fc_counter = torch.zeros(
-                    self.emb_hc.input_seq_length + self.emb_fc.input_seq_length, dtype=torch.float32
-                )
-                fc_counter[self.emb_hc.input_seq_length :] = torch.arange(
-                    1, self.emb_fc.input_seq_length + 1, dtype=torch.float32
-                )
-                self.register_buffer("fc_counter", fc_counter)
+            self.emb_fc = InputLayer(cfg, embedding_type="forecast", shared_embeddings=self.emb_hc.shared_embeddings)
+            self.fc_counter = ForecastCounter(cfg, n_hc=self.emb_hc.input_seq_length, n_fc=self.emb_fc.input_seq_length)
+            add_channels = self.fc_counter.n_channels
 
         # LSTM
         self.lstm = nn.LSTM(
-            input_size=self.emb_hc.output_size + self.forecast_counter, hidden_size=cfg.hidden_size, batch_first=True
+            input_size=self.emb_hc.output_size + add_channels, hidden_size=cfg.hidden_size, batch_first=True
         )
 
         self.dropout = nn.Dropout(p=cfg.dropout_rate)
@@ -100,9 +92,7 @@ class CudaLSTM(nn.Module):
         if self.forecast_mode:
             x_fc = self.emb_fc(sample)
             x_lstm = torch.cat((x_lstm, x_fc), dim=1)
-
-            if self.forecast_counter == 1:
-                x_lstm = torch.cat((x_lstm, self.fc_counter.view(1, -1, 1).expand(x_lstm.shape[0], -1, -1)), dim=2)
+            x_lstm = self.fc_counter(x_lstm)
 
         # Forward pass through the LSTM
         hs, _ = self.lstm(x_lstm)

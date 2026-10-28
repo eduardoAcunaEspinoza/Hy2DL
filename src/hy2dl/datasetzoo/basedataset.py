@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import psutil
 import torch
+from threadpoolctl import threadpool_limits
 import xarray as xr
 import xarray_tensorstore
 import yaml
@@ -160,7 +161,7 @@ class BaseDataset(Dataset):
 
         Parameters
         ----------
-        idx: list[int]
+        indices: list[int]
             Indexes of the data-sample to extract. The indexes refers to the positions in the `self.valid_samples`
             table, which contains the (gauge_id, date, source) combinations, that can be used for training/evaluation.
 
@@ -169,16 +170,23 @@ class BaseDataset(Dataset):
         sample: dict[str, Any]
             A dictionary containing the information that will be used to train the model. Elements of the dictionary
             include:
-            - x_d: dict[str, torch.Tensor]
-                Dynamic inputs in hindcast period. Keys are the variable names and the values are tensors of shape
-                (B, L).In case of multiple frequencies, one dictionary per frequency is created.
+            - x_d: torch.Tensor | dict[str, torch.Tensor], shape (B, L, F)
+                Dynamic inputs in hindcast period. If a single group of variables is used, this is a single tensor.
+                If multiple groups of variables are used (`dynamic_input` is a dict), this is a dictionary keyed by
+                group name, each holding a tensor of shape (B, L, F_group). If `custom_seq_processing` is used
+                (multiple frequencies), one entry `x_d_<freq_name>` is created per frequency instead, each following
+                the same single-tensor-or-dict-of-groups convention.
             - y_obs: torch.Tensor, shape (B, N, T)
                 Target variables.
             - x_s: torch.Tensor | None, shape (B, NS)
                 Static inputs.
-            - x_d_fc: dict[str, torch.Tensor] | None
-                Dynamic inputs in forecast period. Keys are the variable names and the values are tensors of shape
-                (B, LF).
+            - x_d_fc: torch.Tensor | dict[str, torch.Tensor] | None
+                Dynamic inputs in forecast period, keyed by forecast-signal group name (e.g. "pseudo_forecast",
+                "forecast", "ar", or custom group names), mirroring the structure of `cfg.forecast_signals` /
+                `cfg.extended_forecast_signals`. Each value is a tensor of shape (B, LF, F_group). Depending on each
+                sample's source ("obs" or "fc"), a given group is populated either from the observed dataset
+                (pseudo-forecast / autoregressive input) or from the real forecast dataset, with rows belonging to
+                the other source left as NaN.
             - source_fc: np.ndarray | None, shape (B,)
                 String array to differentiate the source of forecast signals: pseudoforecast ("obs") or forecast ("fc").
             - init_time_fc: np.ndarray | None, shape (B,)
@@ -198,12 +206,15 @@ class BaseDataset(Dataset):
         Shape abbreviations used:
         - B: batch size
         - L: sequence length hindcast period.
+        - F: number of features in hindcast period (or F_group: number of features in a given group)
         - N: length of the target sequence, based on `predict_last_n` cofiguration argument
         - LF: length of forecast period
+        - F_group: number of features in a given forecast-signal group
         - T: number of target variables
         - NS: number of static inputs
 
         """
+
         # If we are loading data lazily from disk, we do the lazy loading directly pytorch´s workers.
         if not self.dataset_in_ram and getattr(self, "ds_ts", None) is None:
             self._load_dataset(engine="tensorstore")
@@ -212,91 +223,51 @@ class BaseDataset(Dataset):
             self._load_forecast_dataset(engine="tensorstore")
 
         sample = {}
+
         # Valid samples
         valid_sample = self.valid_samples[indices]
         id, date, source = valid_sample["gauge_id"], valid_sample["date"], valid_sample["source"]
-        unique_sources = np.unique(source)
-
         # Indexes of the valid samples
         valid_idx_hc = self.valid_idx_hc[indices]
         id_idx_hc, date_idx_hc = valid_idx_hc["gauge_idx"], valid_idx_hc["date_idx"]
-
         valid_idx_fc = self.valid_idx_fc[indices]
         id_idx_fc, date_idx_fc = valid_idx_fc["gauge_idx"], valid_idx_fc["date_idx"]
 
-        def _extract_xd_sequence(
-            var_list: list[str],
-            id_idx: np.ndarray,
-            start_t_indices: np.ndarray,
-            length: int,
-            freq_factor: int | None = None,
-            as_dict: bool = True,
-        ) -> dict[str, torch.Tensor] | torch.Tensor:
-            """Helper function to extract a block (Batch, Sequence, Features) from dataset.
+        def _extract_xd_sequence(id_idx: np.ndarray, start_t_idx: np.ndarray, length: int) -> torch.Tensor:
+            """Helper function to extract a block (batch, sequence) from dataset.
 
             Parameters
             ----------
-            var_list: list[str]
-                List of variable names to extract.
             id_idx: np.ndarray
                 Indexes of the gauges to extract
-            start: np.ndarray
+            start_t_idx: np.ndarray
                 Starting index of each batch element
             length: int
                 Length of the sequence.
-            freq_factor: int | None, default=None
-                If provided, the sequence wil averaged over the frequency factor
-            as_dict: bool, default=True
-                Whether to return the result as a dictionary (with variable names as keys) or as a tensor
 
             Returns
             -------
-            dict[str, torch.Tensor] or torch.Tensor
-                The extracted block, either as a dictionary or as a tensor
-                - dict: features names as keys, and values being the corresponding tensors of shape (B, L)
-                - tensor: a single tensor of shape (B, L, F)
+            torch.Tensor
+                The extracted block as a single tensor of shape (B, L, F)
 
             """
-            var_indices = [self.feature_to_idx["obs"][var] for var in var_list]
-
             if self.dataset_in_ram:
-                batch_gauge_idx = id_idx[:, None]
-                batch_time_idx = start_t_indices[:, None] + np.arange(length)
-                x_tensor = self.ds_ts[batch_gauge_idx, batch_time_idx][:, :, var_indices]
+                return torch.stack([self.ds_ts[g, t : t + length] for g, t in zip(id_idx, start_t_idx, strict=True)])
+
             else:
                 batch_gauge_idx = xr.DataArray(id_idx, dims=["batch"])
-                batch_time_idx = xr.DataArray(start_t_indices[:, None] + np.arange(length), dims=["batch", "time"])
-                data_slice = (
-                    self.ds_ts["data"]
-                    .isel(gauge_id=batch_gauge_idx, date=batch_time_idx, feature=var_indices)
-                    .compute()
-                )
-                # standardize data
-                data_slice = (data_slice - self.scaler.sel(statistic="mean", feature=var_list).data) / self.scaler.sel(
-                    statistic="std", feature=var_list
-                ).data
+                batch_time_idx = xr.DataArray(start_t_idx[:, None] + np.arange(length), dims=["batch", "time"])
+                data_slice = self.ds_ts["data"].isel(gauge_id=batch_gauge_idx, date=batch_time_idx).compute()
 
-                x_tensor = torch.from_numpy(data_slice.data).float()  # convert to tensor
+                # Standardize
+                data_slice = (data_slice.data - self.ds_ts_mean) / self.ds_ts_std
+                return torch.from_numpy(data_slice).float()
 
-            # Apply frequency reduction to the whole batch at once
-            if freq_factor is not None:
-                b, t, f = x_tensor.shape
-                x_tensor = x_tensor.reshape(b, t // freq_factor, freq_factor, f).mean(dim=2)
-
-            # Return as dictionary or tensor
-            return dict(zip(var_list, x_tensor.unbind(dim=2), strict=True)) if as_dict else x_tensor
-
-        def _extract_xfc_sequence(
-            var_list: list[str],
-            id_idx: np.ndarray,
-            start_t_indices: np.ndarray,
-        ) -> dict[str, torch.Tensor] | torch.Tensor:
-            """Helper function to extract a block (Batch, Sequence, Features) from forecast dataset.
+        def _extract_xfc_sequence(id_idx: np.ndarray, start_t_idx: np.ndarray) -> torch.Tensor:
+            """Helper function to extract a block (batch, sequence) from forecast dataset.
 
             Parameters
             ----------
-            var_list: list[str]
-                List of variable names to extract.
             id_idx: np.ndarray
                 Indexes of the gauges to extract
             start: np.ndarray
@@ -308,90 +279,107 @@ class BaseDataset(Dataset):
                 The extracted block (B, L, F)
 
             """
-            var_indices = [self.feature_to_idx["fc"][var] for var in var_list]
-
             if self.fc_in_ram:
-                x_tensor = self.ds_fc[id_idx, start_t_indices][:, :, var_indices]
+                return self.ds_fc[id_idx, start_t_idx]
             else:
                 batch_gauge_idx = xr.DataArray(id_idx, dims=["batch"])
-                batch_time_idx = xr.DataArray(start_t_indices, dims=["batch"])
+                batch_time_idx = xr.DataArray(start_t_idx, dims=["batch"])
+                data_slice = self.ds_fc["data"].isel(gauge_id=batch_gauge_idx, date=batch_time_idx).compute()
+                data_slice = (data_slice - self.ds_fc_mean) / self.ds_fc_std
+                return torch.from_numpy(data_slice.data).float()
 
-                data_slice = (
-                    self.ds_fc["data"]
-                    .isel(
-                        gauge_id=batch_gauge_idx,
-                        date=batch_time_idx,
-                        feature=var_indices,
+        def _slice_tensors(tensor, t_start, t_end, idx_node):
+            """Recursively slices tensors returning dicts of 3D tensors or 3D tensors."""
+            if isinstance(idx_node, dict):
+                return {k: _slice_tensors(tensor, t_start, t_end, v) for k, v in idx_node.items()}
+            elif isinstance(idx_node, list):
+                return tensor[:, t_start:t_end, idx_node]
+            return None
+
+        def _create_empty_container(o_idx, f_idx):
+            if isinstance(o_idx, dict) or isinstance(f_idx, dict):
+                keys = list((o_idx or {}) | (f_idx or {}))
+                return {
+                    k: _create_empty_container(
+                        o_idx.get(k) if isinstance(o_idx, dict) else None,
+                        f_idx.get(k) if isinstance(f_idx, dict) else None,
                     )
-                    .compute()
-                )
+                    for k in keys
+                }
+            ref = o_idx if o_idx is not None else f_idx
+            n_features = len(ref) if ref is not None else 0
+            return torch.full(
+                (len(id_idx_fc), self.cfg.seq_length_forecast, n_features), float("nan"), dtype=torch.float32
+            )
 
-                data_slice = (
-                    data_slice - self.scaler_fc.sel(statistic="mean", feature=var_list).data
-                ) / self.scaler_fc.sel(statistic="std", feature=var_list).data
-
-                x_tensor = torch.from_numpy(data_slice.data).float()  # convert to tensor
-
-            return x_tensor
+        def _fill_forecast(obs_slice, fc_slice, obs_mask, fc_mask, o_idx, f_idx, container, key=None):
+            if isinstance(container, dict):
+                for k, sub in container.items():
+                    _fill_forecast(
+                        obs_slice,
+                        fc_slice,
+                        obs_mask,
+                        fc_mask,
+                        o_idx.get(k) if isinstance(o_idx, dict) else None,
+                        f_idx.get(k) if isinstance(f_idx, dict) else None,
+                        sub,
+                        key=k,
+                    )
+                return
+            
+            # Autoregressive input
+            if key == self.cfg.ar_group_name and o_idx is not None:
+                obs_values = obs_slice[:, :, o_idx]
+                if self.period == "training":
+                    obs_values = self._add_noise_ar(obs_values)
+                container[:] = obs_values
+            # Meteorological input
+            else:
+                if o_idx is not None and obs_mask.any():
+                    container[obs_mask] = obs_slice[obs_mask][:, :, o_idx]
+                if f_idx is not None and fc_slice is not None:
+                    container[fc_mask] = fc_slice[:, :, f_idx]
 
         # --------------------------
         # Hindcast period
         # --------------------------
+        total_length = self.cfg.seq_length_hindcast + self.cfg.seq_length_forecast
         start_hindcasts = date_idx_hc - self.cfg.seq_length_hindcast + 1
-        if self.cfg.custom_seq_processing is None:  # single frequency
-            sample["x_d"] = _extract_xd_sequence(
-                var_list=self.dynamic_input,
-                id_idx=id_idx_hc,
-                start_t_indices=start_hindcasts,
-                length=self.cfg.seq_length_hindcast,
-            )
-        else:  # multi-frequency
-            current_index = 0
+
+        # Extract information block for our batch
+        x_batch = _extract_xd_sequence(id_idx=id_idx_hc, start_t_idx=start_hindcasts, length=total_length)
+
+        # Hindcast period
+        if self.cfg.custom_seq_processing is None:
+            sample["x_d"] = _slice_tensors(x_batch, 0, self.cfg.seq_length_hindcast, self.feature_group_indices["x_d"])
+        else:
+            current_idx = 0
             for subset_name, subset_info in self.cfg.custom_seq_processing.items():
-                subset_length = subset_info["n_steps"] * subset_info["freq_factor"]
-                subset_variables = (
-                    self.input_per_freq[subset_name]
-                    if isinstance(self.cfg.dynamic_input, dict)
-                    else self.cfg.dynamic_input
+                subset_len = subset_info["n_steps"] * subset_info["freq_factor"]
+                freq_factor = subset_info["freq_factor"]
+                # Get values (tensor or dictionary ) for frequency segment
+                x_freq = _slice_tensors(
+                    x_batch, current_idx, current_idx + subset_len, self.feature_group_indices["x_d"][subset_name]
                 )
-                sample["x_d_" + subset_name] = _extract_xd_sequence(
-                    var_list=subset_variables,
-                    id_idx=id_idx_hc,
-                    start_t_indices=start_hindcasts + current_index,
-                    length=subset_length,
-                    freq_factor=subset_info["freq_factor"],
-                )
-                current_index += subset_length
+
+                # frequency reshaping
+                if isinstance(x_freq, dict):
+                    sample["x_d_" + subset_name] = {
+                        g: t.reshape(t.shape[0], t.shape[1] // freq_factor, freq_factor, t.shape[2]).mean(dim=2)
+                        for g, t in x_freq.items()
+                    }
+                else:
+                    b, t_dim, f = x_freq.shape
+                    sample["x_d_" + subset_name] = x_freq.reshape(b, t_dim // freq_factor, freq_factor, f).mean(dim=2)
+
+                current_idx += subset_len
 
         # Hybrid model (input for conceptual part)
         if self.cfg.conceptual_model is not None:
             sample["x_d_conceptual"] = {}
-            for k, v in self.cfg.dynamic_input_conceptual_model.items():
-                var_list = [v] if isinstance(v, str) else v
-
-                # Extract the sequence (this returns standardized data)
-                x_conceptual = _extract_xd_sequence(
-                    var_list=var_list,
-                    id_idx=id_idx_hc,
-                    start_t_indices=start_hindcasts,
-                    length=self.cfg.seq_length_hindcast,
-                    as_dict=False,
-                )
-
-                # Variables for conceptual model should be in the original scale, so we back-transform them
-                var_mean = (
-                    torch.from_numpy(self.scaler.sel(statistic="mean", feature=var_list)["data"].values)
-                    .float()
-                    .view(1, 1, -1)
-                )
-                var_std = (
-                    torch.from_numpy(self.scaler.sel(statistic="std", feature=var_list)["data"].values)
-                    .float()
-                    .view(1, 1, -1)
-                )
-
-                x_conceptual = (x_conceptual * var_std) + var_mean
-                sample["x_d_conceptual"][k] = torch.nanmean(x_conceptual, dim=2)
+            x_hind_unstd = (x_batch[:, : self.cfg.seq_length_hindcast, :] * self.ds_ts_std) + self.ds_ts_mean
+            for k, v in self.feature_group_indices["x_d_conceptual"].items():
+                sample["x_d_conceptual"][k] = torch.nanmean(x_hind_unstd[:, :, v], dim=2)
 
         # --------------------------
         # Static input
@@ -402,92 +390,37 @@ class BaseDataset(Dataset):
         # --------------------------
         # Target
         # --------------------------
-        sample["y_obs"] = _extract_xd_sequence(
-            var_list=self.cfg.target,
-            id_idx=id_idx_hc,
-            start_t_indices=date_idx_hc + 1 + self.cfg.seq_length_forecast - self.cfg.predict_last_n,
-            length=self.cfg.predict_last_n,
-            as_dict=False,
+        t_start = self.cfg.seq_length_hindcast + self.cfg.seq_length_forecast - self.cfg.predict_last_n
+        sample["y_obs"] = _slice_tensors(
+            x_batch, t_start, t_start + self.cfg.predict_last_n, self.feature_group_indices["y_obs"]
         )
 
         # --------------------------
         # Forecast period
         # --------------------------
-        if self.cfg.pseudo_forecast_input or self.cfg.forecast_input:
-            if self.cfg.merge_forecast_signal:  # If I need to combine the pseudo-forecast and forecast
-                shared_vars = self.pseudo_forecast_input if self.pseudo_forecast_input else self.forecast_input
-                x_tensor = torch.full(
-                    size=(len(id_idx_fc), self.cfg.seq_length_forecast, len(shared_vars)),
-                    fill_value=np.nan,
-                    dtype=torch.float32,
-                )
-                if "obs" in unique_sources:
-                    source_mask = source == "obs"
-                    x_tensor[source_mask, :, :] = _extract_xd_sequence(
-                        var_list=shared_vars,
-                        id_idx=id_idx_fc[source_mask],
-                        start_t_indices=date_idx_fc[source_mask] + 1,
-                        length=self.cfg.seq_length_forecast,
-                        as_dict=False,
-                    )
+        if self.cfg.forecast_signals:
+            # We can be mapping for pseudoforecast (fc_obs), real forecast (fc) or both
+            obs_mask = source == "obs"
+            fc_mask = source == "fc"
 
-                if "fc" in unique_sources:
-                    source_mask = source == "fc"
-                    x_tensor[source_mask, :, :] = _extract_xfc_sequence(
-                        var_list=shared_vars, id_idx=id_idx_fc[source_mask], start_t_indices=date_idx_fc[source_mask]
-                    )
+            # Pseudo-forecast / AR data lives in the right-tail of x_batch
+            obs_slice = x_batch[:, self.cfg.seq_length_hindcast :, :]
+            # Real forecast data needs a separate lookup, only for the rows actually sourced from "fc"
+            fc_slice = _extract_xfc_sequence(id_idx_fc[fc_mask], date_idx_fc[fc_mask]) if fc_mask.any() else None
 
-                sample["x_d_fc"] = dict(zip(shared_vars, x_tensor.unbind(dim=2), strict=True))
-
-            else:  # If I need to keep the pseudo-forecast and forecast as separate variables
-                sample["x_d_fc"] = {}
-                if "obs" in unique_sources:
-                    x_tensor = torch.full(
-                        size=(len(id_idx_fc), self.cfg.seq_length_forecast, len(self.pseudo_forecast_input)),
-                        fill_value=np.nan,
-                        dtype=torch.float32,
-                    )
-                    source_mask = source == "obs"
-                    x_tensor[source_mask, :, :] = _extract_xd_sequence(
-                        var_list=self.pseudo_forecast_input,
-                        id_idx=id_idx_fc[source_mask],
-                        start_t_indices=date_idx_fc[source_mask] + 1,
-                        length=self.cfg.seq_length_forecast,
-                        as_dict=False,
-                    )
-                    sample["x_d_fc"].update(dict(zip(self.pseudo_forecast_input, x_tensor.unbind(dim=2), strict=True)))
-
-                if "fc" in unique_sources:
-                    x_tensor = torch.full(
-                        size=(len(id_idx_fc), self.cfg.seq_length_forecast, len(self.forecast_input)),
-                        fill_value=np.nan,
-                        dtype=torch.float32,
-                    )
-                    source_mask = source == "fc"
-                    x_tensor[source_mask, :, :] = _extract_xfc_sequence(
-                        var_list=self.forecast_input,
-                        id_idx=id_idx_fc[source_mask],
-                        start_t_indices=date_idx_fc[source_mask],
-                    )
-                    sample["x_d_fc"].update(dict(zip(self.forecast_input, x_tensor.unbind(dim=2), strict=True)))
-
-            if self.pseudo_forecast_ar_input:  # Auto-regressive input (teacher-forcing) for pseudo-forecast period.
-                x_ar_fc = _extract_xd_sequence(
-                    var_list=self.pseudo_forecast_ar_input,
-                    id_idx=id_idx_hc,
-                    start_t_indices=date_idx_hc + 1,
-                    length=self.cfg.seq_length_forecast,
-                    as_dict=False,
-                )
-                x_ar_fc = self._add_noise_ar(x_ar_fc)
-
-                sample["x_d_fc"].update(dict(zip(self.pseudo_forecast_ar_input, x_ar_fc.unbind(dim=2), strict=True)))
+            idx_obs = self.feature_group_indices["x_d_fc_obs"]
+            idx_fc = self.feature_group_indices["x_d_fc_fc"]
+            sample["x_d_fc"] = _create_empty_container(idx_obs, idx_fc)
+            _fill_forecast(obs_slice, fc_slice, obs_mask, fc_mask, idx_obs, idx_fc, sample["x_d_fc"])
 
             # Additional forecast variables
             sample["source_fc"] = source
             sample["init_time_fc"] = date
-            sample["persistent_q"] = _extract_xd_sequence(
-                var_list=self.cfg.target, id_idx=id_idx_hc, start_t_indices=date_idx_hc, length=1, as_dict=False
+            sample["persistent_q"] = _slice_tensors(
+                x_batch,
+                self.cfg.seq_length_hindcast - 1,
+                self.cfg.seq_length_hindcast,
+                self.feature_group_indices["y_obs"],
             )
 
         # --------------------------
@@ -808,6 +741,36 @@ class BaseDataset(Dataset):
                 f"factor of {self.cfg.ram_safety_factor})."
             )
             return False
+
+    def _compute_feature_group_indices(self):
+        """Compute feature group indices for fast extraction."""
+
+        def _idx_mapping(cfg_node, reference_dict):
+            """Recursively maps variable names to their integer positions in `reference_list`."""
+            if isinstance(cfg_node, dict):
+                return {k: _idx_mapping(v, reference_dict) for k, v in cfg_node.items()}
+            elif isinstance(cfg_node, list):
+                return [reference_dict[v] for v in cfg_node]
+            return None
+
+        self.feature_group_indices = {
+            "x_d": _idx_mapping(self.cfg.dynamic_input, self.feature_to_idx["obs"]),
+            "y_obs": _idx_mapping(self.cfg.target, self.feature_to_idx["obs"]),
+        }
+
+        if self.cfg.conceptual_model is not None:
+            self.feature_group_indices["x_d_conceptual"] = _idx_mapping(
+                self.cfg.dynamic_input_conceptual_model, self.feature_to_idx["obs"]
+            )
+
+        if self.cfg.forecast_signals:
+            self.feature_group_indices["x_d_fc_obs"] = _idx_mapping(
+                self.cfg.extended_forecast_signals_obs, self.feature_to_idx.get("obs", {})
+            )
+            self.feature_group_indices["x_d_fc_fc"] = _idx_mapping(
+                self.cfg.extended_forecast_signals_fc, self.feature_to_idx.get("fc", {})
+            )
+
 
     def _create_dataset(self, save_path: Path | None = None):
         """Creates the dataset and keeps it in memory.
@@ -1154,9 +1117,9 @@ class BaseDataset(Dataset):
         self.valid_gauges = np.unique(self.valid_samples["gauge_id"])
 
         # Map valid samples to their corresponding indexes in the zarr structure for faster access in getitem
-        self._map_indexes()
+        self._map_valid_samples()
 
-    def _map_indexes(self):
+    def _map_valid_samples(self):
         """Map gauge_id, date and feature to their corresponding indexes
 
         This function creates the mapping between gauge_id, date and features to their corresponding indexes in the
@@ -1211,6 +1174,9 @@ class BaseDataset(Dataset):
 
             # Map features
             self.feature_to_idx[source] = dict(zip(target_feature, range(len(target_feature)), strict=True))
+
+        # Compute feature group indices for efficient data extraction
+        self._compute_feature_group_indices()
 
     def _parse_datetime(self, date_str: str, freq: str) -> pd.Timestamp:
         """Convert frequency string into pandas Timestamp object.
@@ -1287,23 +1253,34 @@ class BaseDataset(Dataset):
         # This function is specific for each dataset
         raise NotImplementedError
 
-    def _read_data(self) -> pd.DataFrame:
+    def _read_data(self, gauge_id: str) -> pd.DataFrame:
         # This function is specific for each dataset
         raise NotImplementedError
 
     def _standardize_data(self):
         """Standardize the data using the previously-computed scaler."""
 
-        # If observed dataset is in RAM, standardize it
+        # If observed dataset is in RAM, standardize it. If not, save the scalers to standardize the data on the fly
         if self.dataset_in_ram:
             self.ds_ts = (self.ds_ts - self.scaler.sel(statistic="mean")) / self.scaler.sel(statistic="std")
             self.cfg.logger.info("Dataset was successfully standardized.")
         else:
             self.cfg.logger.info(
-                "To keep lazy loading, the data will be standardized on the fly while constructing the batches."
+                "Lazy loading active: precalculating numpy scalers for on-the-fly batch standardization."
             )
+        # If we have hybrid model, we need the statistics to un-standardize the conceptual model inputs
+        self.ds_ts_mean = (
+            self.scaler.sel(statistic="mean", feature=self.ds_ts.feature.values)["data"]
+            .values.astype(np.float32)
+            .reshape(1, 1, -1)
+        )
+        self.ds_ts_std = (
+            self.scaler.sel(statistic="std", feature=self.ds_ts.feature.values)["data"]
+            .values.astype(np.float32)
+            .reshape(1, 1, -1)
+        )
 
-        # If forecast dataset exist and is in RAM, standardize it
+        # If forecast dataset is in RAM, standardize it. If not, save the scalers to standardize the data on the fly
         if self.forecast_input:
             if self.fc_in_ram:
                 self.ds_fc = (self.ds_fc - self.scaler_fc.sel(statistic="mean")) / self.scaler_fc.sel(statistic="std")
@@ -1312,6 +1289,16 @@ class BaseDataset(Dataset):
                 self.cfg.logger.info(
                     "To keep lazy loading, the forecast data will be standardized on the fly while constructing the "
                     "batches."
+                )
+                self.ds_fc_mean = (
+                    self.scaler_fc.sel(statistic="mean", feature=self.ds_fc.feature.values)["data"]
+                    .values.astype(np.float32)
+                    .reshape(1, 1, -1)
+                )
+                self.ds_fc_std = (
+                    self.scaler_fc.sel(statistic="std", feature=self.ds_fc.feature.values)["data"]
+                    .values.astype(np.float32)
+                    .reshape(1, 1, -1)
                 )
 
         # If we have static attributes, standardize them
@@ -1377,7 +1364,7 @@ class BaseDataset(Dataset):
         self.cfg.logger.info(f"Number of valid samples: {self.valid_samples.size:_}".replace("_", " "))
 
         # Map valid samples to their corresponding indexes in the zarr structure for faster access in getitem
-        self._map_indexes()
+        self._map_valid_samples()
 
         if save_path is not None:  # Save valid samples to csv if the user requested it
             pd.DataFrame(self.valid_samples).to_csv(save_path, index=False)
@@ -1692,6 +1679,8 @@ class BaseDataset(Dataset):
 
         """
         dask.config.set(scheduler="synchronous")
+        torch.set_num_threads(1)
+        threadpool_limits(limits=1)
 
     @staticmethod
     def collate_fn(batch):

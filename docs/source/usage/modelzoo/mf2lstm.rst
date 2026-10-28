@@ -39,5 +39,5 @@ Data assimilation
 
 Additional
 ----------
-   - Optional step counters (``forecast_counter``) can be concatenated along the feature dimension to provide explicit positional encoding.
+   - Optional step counters (``forecast_counter``) can be concatenated along the feature dimension to provide explicit positional encoding across the hindcast and forecast horizons (supporting linear step counting or exponential decay via ``forecast_counter_tau``).
    - This model supports :ref:`mdn_reference` for probabilistic output.

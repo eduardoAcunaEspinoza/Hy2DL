@@ -23,10 +23,18 @@ class InputLayer(nn.Module):
         Configuration file.
     embedding_type : str
         Type of embedding to use (hindcast or forecast).
+    shared_embeddings : nn.ModuleDict | None, optional
+        Optional shared embedding module dictionary across input layers (e.g., sharing dynamic or static
+        embedding weights between hindcast and forecast input layers). Default is None.
 
     """
 
-    def __init__(self, cfg: Config, embedding_type: str = "hindcast"):
+    def __init__(
+        self,
+        cfg: Config,
+        embedding_type: str = "hindcast",
+        shared_embeddings: nn.ModuleDict | None = None,
+    ):
         super().__init__()
 
         self.embedding_type = embedding_type
@@ -34,9 +42,7 @@ class InputLayer(nn.Module):
             self.dynamic_input = cfg.dynamic_input
             self._x_d_key = "x_d"
         elif embedding_type == "forecast":
-            self.dynamic_input = (
-                cfg.forecast_signals if cfg.pseudo_forecast_ar_input == [] else cfg.extended_forecast_signals
-            )
+            self.dynamic_input = cfg.extended_forecast_signals
             self._x_d_key = "x_d_fc"
         else:
             raise ValueError("embedding_type must be either 'hindcast' or 'forecast'")
@@ -61,6 +67,13 @@ class InputLayer(nn.Module):
             self.input_seq_length = sum(v["n_steps"] for v in cfg.custom_seq_processing.values())
 
         # Get embedding networks
+        if shared_embeddings is not None:
+            self.shared_embeddings = shared_embeddings
+        elif cfg.shared_dynamic_embedding:
+            self.shared_embeddings = nn.ModuleDict()
+        else:
+            self.shared_embeddings = None
+
         self._get_embeddings(cfg)
 
         # Get binary flags associated with custom_seq_processing
@@ -72,7 +85,9 @@ class InputLayer(nn.Module):
         # Save config
         self.cfg = cfg
 
-    def forward(self, sample: dict[str, Any], assemble: bool = True) -> torch.Tensor | dict[str, torch.Tensor]:
+    def forward(
+        self, sample: dict[str, Any], assemble: bool = True, group_mask: dict[str, torch.Tensor] | None = None
+    ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Forward pass of embedding networks.
 
         Parameters
@@ -83,6 +98,10 @@ class InputLayer(nn.Module):
 
         assemble: bool
             Whether to assemble the different tensors into a single tensor or return a dictionary with the different
+            tensors
+
+        group_mask: dict[str, torch.Tensor] | None
+            Pre-computed dropout mask per group (boolean tensors of shape (B,)).
 
         Returns
         -------
@@ -95,11 +114,11 @@ class InputLayer(nn.Module):
         # Dynamic inputs
         # -------------------------
         if self.cfg.nan_handling_method == "masked_mean":
-            x_d = self._masked_mean(sample)
+            x_d = self._masked_mean(sample, group_mask=group_mask)
         elif self.cfg.nan_handling_method == "input_replacement":
             x_d = self._input_replacement(sample)
         else:
-            x_d = torch.cat([v(torch.stack(list(sample[k].values()), dim=-1)) for k, v in self.emb_x_d.items()], dim=1)
+            x_d = torch.cat([v(sample[k]) for k, v in self.emb_x_d.items()], dim=1)
 
         # -------------------------
         # Frequency flags
@@ -172,14 +191,21 @@ class InputLayer(nn.Module):
         # -------------------------
         self.emb_x_d = nn.ModuleDict()
 
+        def _get_or_create(group_key: str, input_dim: int) -> nn.Module:
+            if self.shared_embeddings is not None:
+                if group_key not in self.shared_embeddings:
+                    self.shared_embeddings[group_key] = InputLayer.build_embedding(
+                        input_dim=input_dim, embedding=cfg.dynamic_embedding
+                    )
+                return self.shared_embeddings[group_key]
+            return InputLayer.build_embedding(input_dim=input_dim, embedding=cfg.dynamic_embedding)
+
         # Case 1: Single group of variables, same variables along the sequence length, and only one sequence processing.
         # Note: Forecast period is currently only supported for single frequency!
         if (cfg.custom_seq_processing is None or self.embedding_type == "forecast") and isinstance(
             self.dynamic_input, list
         ):
-            self.emb_x_d[self._x_d_key] = InputLayer.build_embedding(
-                input_dim=len(self.dynamic_input), embedding=cfg.dynamic_embedding
-            )
+            self.emb_x_d[self._x_d_key] = _get_or_create("dynamic", len(self.dynamic_input))
 
         # Case 2. Multiple groups of variables along sequence length, but only one sequence processing type
         # Example: Single frequency case, but we have multiple group of variables.
@@ -192,17 +218,13 @@ class InputLayer(nn.Module):
             if cfg.nan_handling_method == "masked_mean":
                 self.emb_x_d[self._x_d_key] = nn.ModuleDict()
                 for k, v in self.dynamic_input.items():
-                    self.emb_x_d[self._x_d_key][k] = InputLayer.build_embedding(
-                        input_dim=len(v), embedding=cfg.dynamic_embedding
-                    )
+                    self.emb_x_d[self._x_d_key][k] = _get_or_create(k, len(v))
 
             # With input replacement I concatenate all the groups together and add a flag per group. Then I pass
             # the result through an embedding network
             elif cfg.nan_handling_method == "input_replacement":
                 i_dim = len(list(chain.from_iterable(self.dynamic_input.values()))) + len(self.dynamic_input)
-                self.emb_x_d[self._x_d_key] = InputLayer.build_embedding(
-                    input_dim=i_dim, embedding=cfg.dynamic_embedding
-                )
+                self.emb_x_d[self._x_d_key] = _get_or_create("dynamic", i_dim)
 
         # Case 3. Custom sequence processing (e.g. multiple frequencies)
         elif isinstance(cfg.custom_seq_processing, dict) and self.embedding_type == "hindcast":
@@ -210,16 +232,14 @@ class InputLayer(nn.Module):
             for freq in cfg.custom_seq_processing:
                 # Case 3.1. If we have a single group of variables, that does not change between frequencies.
                 if isinstance(self.dynamic_input, list):
-                    self.emb_x_d[f"{self._x_d_key}_{freq}"] = InputLayer.build_embedding(
-                        input_dim=len(self.dynamic_input), embedding=cfg.dynamic_embedding
-                    )
+                    self.emb_x_d[f"{self._x_d_key}_{freq}"] = _get_or_create("dynamic", len(self.dynamic_input))
 
                 # Case 3.2. If we use the different variables per frequency or have more than one group
                 elif isinstance(self.dynamic_input, dict):
                     # Case 3.2.1  If we only have one group of variables
                     if isinstance(self.dynamic_input[freq], list):
-                        self.emb_x_d[f"{self._x_d_key}_{freq}"] = InputLayer.build_embedding(
-                            input_dim=len(self.dynamic_input[freq]), embedding=cfg.dynamic_embedding
+                        self.emb_x_d[f"{self._x_d_key}_{freq}"] = _get_or_create(
+                            "dynamic", len(self.dynamic_input[freq])
                         )
 
                     # Case 3.2.2  If we have multiple groups of variables
@@ -229,9 +249,7 @@ class InputLayer(nn.Module):
                         if cfg.nan_handling_method == "masked_mean":
                             self.emb_x_d[f"{self._x_d_key}_{freq}"] = nn.ModuleDict()
                             for k, v in self.dynamic_input[freq].items():
-                                self.emb_x_d[f"{self._x_d_key}_{freq}"][k] = InputLayer.build_embedding(
-                                    input_dim=len(v), embedding=cfg.dynamic_embedding
-                                )
+                                self.emb_x_d[f"{self._x_d_key}_{freq}"][k] = _get_or_create(k, len(v))
 
                         # With input replacement I concatenate all the groups together and add a flag per group. Then I
                         # pass the result through an embedding network
@@ -239,15 +257,20 @@ class InputLayer(nn.Module):
                             i_dim = len(list(chain.from_iterable(self.dynamic_input[freq].values()))) + len(
                                 self.dynamic_input[freq]
                             )
-                            self.emb_x_d[f"{self._x_d_key}_{freq}"] = InputLayer.build_embedding(
-                                input_dim=i_dim, embedding=cfg.dynamic_embedding
-                            )
+                            self.emb_x_d[f"{self._x_d_key}_{freq}"] = _get_or_create("dynamic", i_dim)
 
         # -------------------------
         # Embeddings for static variables
         # -------------------------
         if cfg.static_input:
-            self.emb_x_s = InputLayer.build_embedding(input_dim=len(cfg.static_input), embedding=cfg.static_embedding)
+            if self.shared_embeddings is not None and "static" in self.shared_embeddings:
+                self.emb_x_s = self.shared_embeddings["static"]
+            else:
+                self.emb_x_s = InputLayer.build_embedding(
+                    input_dim=len(cfg.static_input), embedding=cfg.static_embedding
+                )
+                if self.shared_embeddings is not None:
+                    self.shared_embeddings["static"] = self.emb_x_s
 
     def _input_replacement(self, sample) -> torch.Tensor:
         """Apply input_replacement to handle missing inputs and add associated binary masks.
@@ -271,26 +294,15 @@ class InputLayer(nn.Module):
 
         """
         x_d = []
-        # Compute group-level dropout mask
         if self.cfg.nan_probabilistic_masking:
             self.group_mask = self._mask_groups(sample=sample)
 
         for k, v in self.emb_x_d.items():
-            freq_k = k.split(self._x_d_key + "_")[-1]
-            # Case where I have multiple groups of variables. Can be either one frequency
-            # with multiple groups or multiple frequencies with multiple groups.
-            if (freq_k == self._x_d_key and isinstance(self.dynamic_input, dict)) or (
-                freq_k != self._x_d_key and isinstance(self.dynamic_input[freq_k], dict)
-            ):
+            # Case where sample[k] holds multiple groups of variables
+            if isinstance(sample[k], dict):
                 x_d_groups = []
-
-                # Extract groups
-                groups = self.dynamic_input[freq_k] if freq_k != self._x_d_key else self.dynamic_input
-                for group_id, group_var in groups.items():
-                    # Concatenate variables of the group into single tensor
-                    x_d_group = torch.stack([sample[k][var] for var in group_var], dim=-1)
-
-                    # Mask group based of nan_seq probability and nan_step probability
+                for group_id, x_d_group in sample[k].items():
+                    # Mask group based on nan_seq probability and nan_step probability
                     if self.cfg.nan_probabilistic_masking:
                         probability_mask = (
                             torch.rand(x_d_group.shape[0], x_d_group.shape[1], device=self.cfg.device)
@@ -309,17 +321,16 @@ class InputLayer(nn.Module):
                 # Concatenate groups and pass them through embedding
                 x_d.append(v(torch.cat(x_d_groups, dim=2)))
 
-            # Case in which I only have one group of variables. This can happen, for example, if for one frequency I
-            # have groups and for another frequency I do not.
+            # Case in which sample[k] is already a single assembled tensor (one group of variables).
             else:
-                x_d.append(v(torch.stack(list(sample[k].values()), dim=-1)))
+                x_d.append(v(sample[k]))
 
         return torch.cat(x_d, dim=1)
 
-    def _masked_mean(self, sample) -> torch.Tensor | list[torch.Tensor]:
+    def _masked_mean(self, sample: dict[str, Any], group_mask: dict[str, torch.Tensor] | None = None) -> torch.Tensor:
         """Apply the masked-mean function to handle missing inputs.
 
-        This architecture uses a masked mean approach to handle missing values in the dynamic inputs. It passes
+        This function uses a masked mean approach to handle missing values in the dynamic inputs. It passes
         the different input groups through embedding networks and then apply the torch.nanmean function between
         the embeddings to get rid of nan values.
 
@@ -329,6 +340,9 @@ class InputLayer(nn.Module):
         ----------
         sample: dict[str, torch.Tensor | dict[str, torch.Tensor]]
             Dictionary with the different tensors / dictionaries that will be used for the forward pass.
+
+        group_mask: dict[str, torch.Tensor] | None
+            Pre-computed dropout mask per group (boolean tensors of shape (B,)).
 
         Returns
         -------
@@ -341,29 +355,18 @@ class InputLayer(nn.Module):
             Hydrology and Earth System Sciences, 29(21), 6221–6235. https://doi.org/10.5194/hess-29-6221-2025, 2025
 
         """
-
-        # Process dynamic inputs ---
         x_d = []
-
-        # Compute group-level dropout mask
         if self.cfg.nan_probabilistic_masking:
-            self.group_mask = self._mask_groups(sample=sample)
+            self.group_mask = group_mask if group_mask is not None else self._mask_groups(sample=sample)
 
         for k, v in self.emb_x_d.items():
-            freq_k = k.split(self._x_d_key + "_")[-1]
             # Case where I have multiple groups of variables
             if isinstance(v, nn.ModuleDict):
                 x_d_groups = []
                 for group, emb in v.items():
-                    # Extract variables of interest
-                    group_var = (
-                        self.dynamic_input[freq_k][group] if freq_k != self._x_d_key else self.dynamic_input[group]
-                    )
+                    x_d_group = sample[k][group]
 
-                    # Concatenate variables of the group into single tensor
-                    x_d_group = torch.stack([sample[k][var] for var in group_var], dim=-1)
-
-                    # Mask group based of nan_seq probability and nan_step probability
+                    # Mask group based on nan_seq probability and nan_step probability
                     if self.cfg.nan_probabilistic_masking:
                         probability_mask = (
                             torch.rand(x_d_group.shape[0], x_d_group.shape[1], device=self.cfg.device)
@@ -383,16 +386,14 @@ class InputLayer(nn.Module):
 
                 x_d.append(x_d_groups)
 
-            # Case in which I only have one group of variables. This can happen, for example, if for one frequency I
-            # have groups and for another frequency I do not.
+            # Case in which I only have one group of variables.
             else:
-                x_d.append([v(torch.stack(list(sample[k].values()), dim=-1))])
+                x_d.append([v(sample[k])])
 
         dynamic_output = torch.cat([torch.nanmean(torch.stack(x, dim=0), dim=0) for x in x_d], dim=1)
         # We can have nans, even with the masked-mean architecture, if for a given timestep all the groups had nans.
-        # In this case we substitute the nans with zeros to make sure the model still runs.
-        dynamic_output = torch.where(torch.isnan(dynamic_output), 0.0, dynamic_output)
-        return dynamic_output
+        # In this case we substitute the nans with zeros as the last resort for the forward pass.
+        return torch.where(torch.isnan(dynamic_output), 0.0, dynamic_output)
 
     def _mask_groups(self, sample):
         """Create a mask for the input groups based on their nan_seq probabilities.
@@ -404,8 +405,8 @@ class InputLayer(nn.Module):
 
         Returns
         -------
-        dict[str, bool]
-            Dictionary with boolean values indicating whether to drop each input group.
+        dict[str, torch.Tensor]
+            Dictionary with 1D boolean tensors of shape (B,) indicating whether to drop each input group.
 
         """
         nan_seq_probs = torch.tensor([v["nan_seq"] for v in self.cfg.nan_probability.values()], device=self.cfg.device)

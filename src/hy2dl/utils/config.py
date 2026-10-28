@@ -50,6 +50,7 @@ class Config(object):
         self._check_embeddings()
         self._check_forecast()
         self._check_nan_settings_hc()
+        self._check_shared_embeddings()
         self._check_models()
         self._check_metrics()
         self._check_num_workers()
@@ -75,89 +76,83 @@ class Config(object):
             yaml.dump(temp_cfg, file, default_flow_style=False, sort_keys=False)
 
     def _check_dynamic_inputs(self):
-        if isinstance(self.dynamic_input, dict):
-            if self.custom_seq_processing is None and self.nan_handling_method is None:
-                raise ValueError("Groups of variables are only supported with a `nan_handling_method`")
-            elif self.custom_seq_processing is not None:
-                for v in self.dynamic_input.values():
-                    if isinstance(v, dict) and self.nan_handling_method is None:
-                        raise ValueError("Groups of variables are only supported with a `nan_handling_method`")
+        self.has_groups = False
+        self.group_names = None
+        if not isinstance(self.dynamic_input, dict):
+            return
+
+        # If dynamic_input is a dict and custom_seq_processing in not a dict, means we have one frequency and
+        # multiple groups. If we have groups, we need to include nan_handling methods!
+        if not isinstance(self.custom_seq_processing, dict):
+            if self.nan_handling_method is None:
+                raise ValueError("Groups of variables are only supported with `nan_handling_method`")
+            self.has_groups = True
+            self.group_names = list(self.dynamic_input.keys())
+            return
+
+        # When dynamic_input and custom_seq_processing are dicts, they must have the same keys (frequencies).
+        if set(self.dynamic_input.keys()) != set(self.custom_seq_processing.keys()):
+            raise ValueError("`dynamic_input` and `custom_seq_processing` must have the same keys.")
+
+        # We need to see if dynamic_input is a dictionary of lists (meaning we have multiple frequencies
+        # but only one group) or a dictionary of dictionaries (meaning multiple frequencies and multiple
+        # groups per frequency)
+        d1 = next(iter(self.dynamic_input.values()), None)
+        if isinstance(d1, dict):
+            if self.nan_handling_method is None:
+                raise ValueError("Groups of variables are only supported with `nan_handling_method`")
+            self.has_groups = True
+            self.group_names = {k: list(v.keys()) for k, v in self.dynamic_input.items()}
 
     def _check_embeddings(self):
-        has_embedding = self.dynamic_embedding is not None
+        self.has_embedding = self.dynamic_embedding is not None
 
-        if isinstance(self.dynamic_input, dict) and not has_embedding:
+        if isinstance(self.dynamic_input, dict) and not self.has_embedding:
             raise ValueError("`dynamic_input` as dictionary is only supported when `dynamic_embedding` is specified")
 
         if self.static_input is None and self.static_embedding is not None:
             raise ValueError("`static_embedding` requires specification of `static_input`")
 
-        if (
-            isinstance(self.dynamic_input, dict)
-            and isinstance(self.custom_seq_processing, dict)
-            and set(self.dynamic_input.keys()) != set(self.custom_seq_processing.keys())
-        ):
-            raise ValueError("`dynamic_input` and `custom_seq_processing` must have the same keys.")
-
-        if isinstance(self.nan_handling_method, str) and not has_embedding:
+        if isinstance(self.nan_handling_method, str) and not self.has_embedding:
             raise ValueError("`dynamic_embedding` must be specified when using `nan_handling_method`")
 
     def _check_forecast(self):
-        pfi = self.pseudo_forecast_input
-        fi = self.forecast_input
         di = self.dynamic_input
-        has_embedding = self.dynamic_embedding is not None
-        pfi_ar = self.pseudo_forecast_ar_input
+        fi = self.forecast_input
+        pfi = self.pseudo_forecast_input
 
-        # 1. Embedding check
-        if (isinstance(pfi, dict) or isinstance(fi, dict)) and not has_embedding:
+        # If we have both
+        if pfi and fi:
+            if type(pfi) != type(fi):  # need to be the same type
+                raise ValueError(" `pseudo_forecast_input` and `forecast_input` must be of the same type")
+
+            if isinstance(pfi, list) and isinstance(fi, list) and len(pfi) != len(fi):
+                raise ValueError(
+                    "`pseudo_forecast_input` and `forecast_input` are both lists, meaning they will share"
+                    "the same embedding network. Consequently, they must have the same number of inputs"
+                )
+
+        # If I have groups in hindcast, pfi and fi need to be dictionaries, in order to map the groups
+        if self.has_groups:
+            if pfi and not isinstance(pfi, dict):
+                raise ValueError(
+                    " When groups of variables are specified in `dynamic_input`,"
+                    "`pseudo_forecast_input` must be a dictionary"
+                )
+            if fi and not isinstance(fi, dict):
+                raise ValueError(
+                    " When groups of variables are specified in `dynamic_input`,`forecast_input` must be a dictionary"
+                )
+
+        # If we have dictionaries, embeddings need to be specificed
+        if (isinstance(pfi, dict) or isinstance(fi, dict)) and not self.has_embedding:
             raise ValueError(
-                "`dynamic_embedding` must be specified when either "
-                "`pseudo_forecast_input` or `forecast_input` are dictionaries."
+                "`dynamic_embedding` must be specified when `pseudo_forecast_input`"
+                " and/or `forecast_input` are dictionaries."
             )
-        if pfi_ar and not has_embedding:
-            raise ValueError("`dynamic_embedding` must be specified when `pseudo_forecast_ar_input` is used.")
 
-        # 2. Both are dictionaries
-        if isinstance(pfi, dict) and isinstance(fi, dict):
-            if not set(pfi).isdisjoint(fi):
-                raise ValueError("Keys from `pseudo_forecast_input` and `forecast_input` must be different.")
-
-            pfi_values = set(chain.from_iterable(pfi.values()))
-            fi_values = set(chain.from_iterable(fi.values()))
-            if not pfi_values.isdisjoint(fi_values):
-                raise ValueError("Values from `pseudo_forecast_input` and `forecast_input` must be different.")
-
-        # 3. Both are lists
-        elif isinstance(pfi, list) and isinstance(fi, list) and pfi and fi:
-            are_equal = pfi == fi
-            are_disjoint = set(pfi).isdisjoint(fi)
-
-            if not are_equal and not are_disjoint:
-                raise ValueError(
-                    "`pseudo_forecast_input` and `forecast_input` must be either identical "
-                    "(including element order) or completely different. Partial overlap is not supported."
-                )
-
-            if are_disjoint and not has_embedding:
-                raise ValueError(
-                    "When `pseudo_forecast_input` and `forecast_input` are different, "
-                    "`dynamic_embedding` must be specified."
-                )
-
-        # 4. Mixed Types (One Dict, One List)
-        elif isinstance(pfi, dict) and isinstance(fi, list) and fi:
-            pfi_values = set(chain.from_iterable(pfi.values()))
-            if not pfi_values.isdisjoint(fi):
-                raise ValueError("Values from `pseudo_forecast_input` and `forecast_input` must be different.")
-
-        elif isinstance(fi, dict) and isinstance(pfi, list) and pfi:
-            fi_values = set(chain.from_iterable(fi.values()))
-            if not fi_values.isdisjoint(pfi):
-                raise ValueError("Values from `pseudo_forecast_input` and `forecast_input` must be different.")
-
-        # 5. Dimension checks
-        if not has_embedding:
+        # No embeddings is only supported if a the same input is used in hindcast and forecast
+        if not self.has_embedding:
             if pfi and len(pfi) != len(di):
                 raise ValueError(
                     "`dynamic_input` and `pseudo_forecast_input` have different dimensions. "
@@ -170,87 +165,85 @@ class Config(object):
                     "This is supported only if `dynamic_embedding` is specified."
                 )
 
-        # In case we are using groups, we need to make sure the groups have a nan_probability associated to them.
-        nan_check = False
-        if isinstance(self.nan_probability, dict):
-            nan_check = True
-            nan_groups = list(self.nan_probability.keys())
-
-        # Join forecast signals into single variable. I also evaluate if the forecast signals should later be used on a
-        # single embedding network or not. We use a single embedding if we only have one forecast type (e.g., only
-        # pseudo-forecast) or if the two signals are identical.
+        # Join forecast signals and check if they should be merged in single embedding
         if not fi:
             self.forecast_signals = pfi
             self.merge_forecast_signal = True
         elif not pfi:
             self.forecast_signals = fi
             self.merge_forecast_signal = True
-        elif isinstance(pfi, dict) and isinstance(fi, dict):
-            self.forecast_signals = {**pfi, **fi}
-            self.merge_forecast_signal = False
-            if nan_check and not set(self.forecast_signals).issubset(set(nan_groups)):
-                raise ValueError(
-                    "All groups contained in `forecast_input` and `pseudo_forecast_input` must be specified in"
-                    "the `nan_probability` dictionary"
-                )
-        elif isinstance(pfi, dict) and isinstance(fi, list):
-            self.forecast_signals = {**pfi, "forecast": fi}
-            self.merge_forecast_signal = False
-            if nan_check and not set(self.forecast_signals).issubset(set(nan_groups)):
-                raise ValueError(
-                    "All groups contained in `forecast_input` and `pseudo_forecast_input` must be specified in"
-                    "the `nan_probability` dictionary. Because `forecast_input` is a list, it should be assigned the"
-                    "key `forecast` in the `nan_probability` dictionary."
-                )
-        elif isinstance(fi, dict) and isinstance(pfi, list):
-            self.forecast_signals = {**fi, "pseudo_forecast": pfi}
-            self.merge_forecast_signal = False
-            if nan_check and not set(self.forecast_signals).issubset(set(nan_groups)):
-                raise ValueError(
-                    "All groups contained in `forecast_input` and `pseudo_forecast_input` must be specified in"
-                    "the `nan_probability` dictionary. Because `pseudo_forecast_input` is a list, it should be"
-                    " assigned the key `pseudo_forecast` in the `nan_probability` dictionary."
-                )
         elif isinstance(pfi, list) and isinstance(fi, list):
-            if pfi == fi:
-                self.forecast_signals = pfi
-                self.merge_forecast_signal = True
+            self.forecast_signals = pfi
+            self.merge_forecast_signal = True  # If both are list they will share the same embedding!
+        elif isinstance(pfi, dict) and isinstance(fi, dict):
+            # Check if groups share keys
+            shared_keys = set(pfi.keys()) & set(fi.keys())
+            for k in shared_keys:
+                if len(pfi[k]) != len(fi[k]):
+                    raise ValueError(
+                        f"Group '{k}' has different feature lengths in pseudo_forecast_input "
+                        f"({len(pfi[k])}) and forecast_input ({len(fi[k])})."
+                    )
+            self.forecast_signals = {**pfi, **fi}
+            self.merge_forecast_signal = bool(shared_keys)
+
+        # -------------------------------------------------------------
+        # Assemble extended forecast signals for dataset and model
+        # -------------------------------------------------------------
+        pfi_ar = self.pseudo_forecast_ar_input
+        # Autoregressive type check
+        if pfi_ar:
+            if not isinstance(pfi_ar, dict) or len(pfi_ar) != 1:
+                raise ValueError(" `pseudo_forecast_ar_input` must be a dictionary containing only one key")
+
+            if not self.has_embedding:
+                raise ValueError("`dynamic_embedding` must be specified when `pseudo_forecast_ar_input` is used.")
+
+            if not self.has_groups:
+                raise ValueError(
+                    " `pseudo_forecast_ar_input` requires groups of variables specified in `dynamic_input`"
+                )
+
+            if isinstance(self.group_names, list) and self.ar_group_name not in self.group_names:
+                raise ValueError(" `pseudo_forecast_ar_input` key must also be a key in `dynamic_input` groups")
+            elif isinstance(self.group_names, dict):
+                for v in self.group_names.values():
+                    if self.ar_group_name not in v:
+                        raise ValueError(" `pseudo_forecast_ar_input` key must also be key in `dynamic_input` groups")
+
+            # Model & InputLayer: sees all groups (e.g. {"met": [...], "ar": [...]})
+            self.extended_forecast_signals = {**self.forecast_signals, **pfi_ar}
+            # Basedataset (obs): extracts pfi and pfi_ar from observation dataset
+            self.extended_forecast_signals_obs = {**(pfi or {}), **pfi_ar}
+            # Basedataset (fc): extracts fi from NWP forecast dataset
+            self.extended_forecast_signals_fc = fi or {}
+
+        else:
+            # When no AR input is used, all three point to the standard signals
+            self.extended_forecast_signals = self.forecast_signals
+            if self.has_groups:
+                self.extended_forecast_signals_obs = pfi or {}
+                self.extended_forecast_signals_fc = fi or {}
             else:
-                self.forecast_signals = {"pseudo_forecast": pfi, "forecast": fi}
-                self.merge_forecast_signal = False
-            if nan_check and not set(self.forecast_signals).issubset(set(nan_groups)):
+                self.extended_forecast_signals_obs = pfi if pfi else None
+                self.extended_forecast_signals_fc = fi if fi else None
+
+        # In case we are using groups, we need to make sure the groups have a nan_probability associated to them.
+        if isinstance(self.nan_probability, dict):
+            nan_groups = list(self.nan_probability.keys())
+
+            if not isinstance(self.extended_forecast_signals, dict):
+                raise ValueError(" Groups of variables need to be specified in the forecast period.")
+
+            if not set(self.forecast_signals).issubset(set(nan_groups)):
                 raise ValueError(
                     "All groups contained in `forecast_input` and `pseudo_forecast_input` must be specified in"
-                    "the `nan_probability` dictionary. Because `pseudo_forecast_input` and `forecast_input` are"
-                    " lists, they should be assigned the names `pseudo_forecast` and `forecast`, respectively, in the"
-                    "`nan_probability` dictionary."
+                    "the `nan_probability` dictionary."
                 )
 
         # Check forecast configuration
         if self.forecast_signals and self.seq_length_forecast == 0:
             raise ValueError("Running models in forecast mode requires `seq_length_forecast > 0`")
-
-        # If pseudo_forecast_ar_input is specified, we need to add it as a group in the forecast signals, as it will be
-        # processed by a different embedding. If forecast_signals is a list, we need to convert it to a dictionary.
-        if pfi_ar:
-            if isinstance(self.forecast_signals, list):
-                self.extended_forecast_signals = {"fc": self.forecast_signals, "ar": pfi_ar}
-                if nan_check and not set(self.extended_forecast_signals).issubset(set(nan_groups)):
-                    raise ValueError(
-                        "You are using `pseudo_forecast_ar_input`, together with `pseudo_forecast_input` and/or"
-                        "`forecast_input` as lists. Please specify the keys `fc` (for `pseudo_forecast_input` and/or"
-                        "`forecast_input`) and `ar` (for `pseudo_forecast_ar_input`) in the `nan_probability`"
-                        "dictionary."
-                    )
-            else:
-                self.extended_forecast_signals = {**self.forecast_signals, "ar": pfi_ar}
-                if nan_check and not set(self.extended_forecast_signals).issubset(set(nan_groups)):
-                    raise ValueError(
-                        "You are using `pseudo_forecast_ar_input`, together with `pseudo_forecast_input` and/or"
-                        "`forecast_input`. Please specify the key `ar` (for `pseudo_forecast_ar_input`) in the"
-                        "`nan_probability` dictionary. Moreover, all groups contained in `forecast_input` and/or"
-                        "`pseudo_forecast_input` must be specified "
-                    )
 
     def _check_metrics(self):
         """Check for specific configurations required by certain metrics."""
@@ -379,6 +372,34 @@ class Config(object):
                     f"seq_length_hindcast: {self.seq_length_hindcast} does not match the sum "
                     f"of custom_seq_processing ({seq_length})."
                 )
+
+    def _check_shared_embeddings(self):
+        if self.shared_dynamic_embedding:
+            group_dims = {}
+
+            def _record_group_dims(group_dict):
+                for g_name, features in group_dict.items():
+                    dim = len(features)
+                    if g_name in group_dims and group_dims[g_name] != dim:
+                        raise ValueError(
+                            f"`shared_dynamic_embedding` is True, but group '{g_name}' has mismatched "
+                            f"dimensions: {group_dims[g_name]} vs {dim}."
+                        )
+                    group_dims[g_name] = dim
+
+            # Check hindcast groups
+            if isinstance(self.dynamic_input, dict):
+                d1 = next(iter(self.dynamic_input.values()), None)
+                # Multi-frequency
+                if isinstance(d1, dict):
+                    for freq_dict in self.dynamic_input.values():
+                        _record_group_dims(freq_dict)
+                # Single-frequency with groups
+                elif not isinstance(self.custom_seq_processing, dict):
+                    _record_group_dims(self.dynamic_input)
+            # Check forecast groups
+            if isinstance(getattr(self, "extended_forecast_signals", None), dict):
+                _record_group_dims(self.extended_forecast_signals)
 
     def _create_folder(self):
         """Create a folder to store the results.
@@ -514,6 +535,12 @@ class Config(object):
         return self._cfg.get("ar_teacher_forcing", True)
 
     @property
+    def ar_group_name(self) -> str | None:
+        if isinstance(self._cfg.get("pseudo_forecast_ar_input"), dict):
+            return next(iter(self._cfg.get("pseudo_forecast_ar_input").keys()))
+        return None
+
+    @property
     def batch_size_training(self) -> int:
         return self._cfg.get("batch_size_training")
 
@@ -601,8 +628,12 @@ class Config(object):
         return Config._as_default_list(self._cfg.get("forcings"))
 
     @property
-    def forecast_counter(self) -> bool | None:
-        return self._cfg.get("forecast_counter", False)
+    def forecast_counter(self) -> str | None:
+        return self._cfg.get("forecast_counter", None)
+
+    @property
+    def forecast_counter_tau(self) -> float:
+        return self._cfg.get("forecast_counter_tau", 24)
 
     @property
     def forecast_dataset_in_ram(self) -> bool:
@@ -822,8 +853,8 @@ class Config(object):
         self._cfg["predict_last_n"] = value
 
     @property
-    def pseudo_forecast_ar_input(self) -> list[str]:
-        return Config._as_default_list(self._cfg.get("pseudo_forecast_ar_input"))
+    def pseudo_forecast_ar_input(self) -> dict[str, list[str]] | None:
+        return self._cfg.get("pseudo_forecast_ar_input")
 
     @property
     def pseudo_forecast_input(self) -> list[str] | dict[str, list[str]]:
@@ -858,6 +889,10 @@ class Config(object):
     @property
     def routing_model(self) -> str | None:
         return self._cfg.get("routing_model")
+
+    @property
+    def shared_dynamic_embedding(self) -> bool:
+        return self._cfg.get("shared_dynamic_embedding", False)
 
     @property
     def static_embedding(self) -> dict[str, str | float | list[int]] | None:

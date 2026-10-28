@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 
 from hy2dl.modelzoo import get_head
+from hy2dl.modelzoo.forecast_counter import ForecastCounter
 from hy2dl.modelzoo.inputlayer import InputLayer
 from hy2dl.utils.config import Config
 
@@ -47,26 +48,16 @@ class MF2LSTM(nn.Module):
         super().__init__()
 
         self.emb_hc = InputLayer(cfg)
-        self.emb_fc = InputLayer(cfg, embedding_type="forecast")
-
-        # Create forecast counter if specified
-        self.forecast_counter = 0
-        if cfg.forecast_counter:
-            self.forecast_counter = 1
-            fc_counter = torch.zeros(self.emb_hc.input_seq_length + self.emb_fc.input_seq_length, dtype=torch.float32)
-            fc_counter[self.emb_hc.input_seq_length :] = torch.arange(
-                1, self.emb_fc.input_seq_length + 1, dtype=torch.float32
-            )
-            self.register_buffer("fc_counter", fc_counter)
+        self.emb_fc = InputLayer(cfg, embedding_type="forecast", shared_embeddings=self.emb_hc.shared_embeddings)
+        self.fc_counter = ForecastCounter(cfg, n_hc=self.emb_hc.input_seq_length, n_fc=self.emb_fc.input_seq_length)
 
         # Cuda LSTM
         self.lstm = nn.LSTM(
-            input_size=self.emb_hc.output_size + self.forecast_counter,
+            input_size=self.emb_hc.output_size + self.fc_counter.n_channels,
             hidden_size=cfg.hidden_size,
             batch_first=True,
         )
         self.dropout = torch.nn.Dropout(p=cfg.dropout_rate)
-
         self.predict_last_n = cfg.predict_last_n
 
         # Set teacher-forcing
@@ -84,47 +75,41 @@ class MF2LSTM(nn.Module):
             self.lstm.bias_hh_l0.data[cfg.hidden_size : 2 * cfg.hidden_size] = cfg.initial_forget_bias
 
     def forward(self, x):
+        """Forward pass of the MF2LSTM network.
+
+        Uses teacher-forcing mode (`forward_tf`) during training if `ar_teacher_forcing` is True, otherwise runs
+        autoregressive cycle (`forward_ar`).
+        """
+
         return self.forward_tf(x) if self.training and self.ar_teacher_forcing else self.forward_ar(x)
 
-    def forward_tf(self, sample: dict[str, Any]) -> dict[str, torch.Tensor]:
+    def forward_tf(self, sample):
         """Teacher-forcing mode"""
-        # Preprocess data for hindcast and forecast periods
-        x_lstm = self.emb_hc(sample)
-        x_fc = self.emb_fc(sample)
 
-        # Concatenate both periods along the sequence dimension
-        x_lstm = torch.cat((x_lstm, x_fc), dim=1)
+        x_hc = self.emb_hc(sample)
+        x_hc = self.fc_counter(x_hc, period="hc")
+        out_hc, (hs, cs) = self.lstm(x_hc)
 
-        # Include forecast counter if specified
-        if self.forecast_counter == 1:
-            x_lstm = torch.cat((x_lstm, self.fc_counter.view(1, -1, 1).expand(x_lstm.shape[0], -1, -1)), dim=2)
+        group_mask = getattr(self.emb_hc, "group_mask", None)
+        x_fc = self.emb_fc(sample, group_mask=group_mask)
+        x_fc = self.fc_counter(x_fc, period="fc")
+        out_fc, _ = self.lstm(x_fc, (hs, cs))
 
-        # Forward pass through the LSTM
-        hs, _ = self.lstm(x_lstm)
-        # Extract sequence of interest
-        hs = hs[:, -self.predict_last_n :, :]
-        hs = self.dropout(hs)
-
-        return self.head(hs)
+        out = torch.cat([out_hc, out_fc], dim=1)[:, -self.predict_last_n :, :]
+        return self.head(self.dropout(out))
 
     def forward_ar(self, sample: dict[str, Any]) -> dict[str, torch.Tensor]:
         """Autoregressive mode"""
         model_out = {}
         ### ---------------
-        ### Hindncast period
+        ### Hindcast period
         ### ---------------
         hc_info = self.emb_hc(sample, assemble=False)
         x_hc = torch.cat([hc_info["x_d"], hc_info["freq_flag"], hc_info["x_s"]], dim=2)
-        batch_size = x_hc.shape[0]
-
-        if self.forecast_counter == 1:
-            x_hc = torch.cat(
-                [x_hc, self.fc_counter[: self.emb_hc.input_seq_length].view(1, -1, 1).expand(batch_size, -1, -1)],
-                dim=2,
-            )
+        x_hc = self.fc_counter(x_hc, period="hc")
 
         # Forward pass of hindcast period
-        _, (hs, cs) = self.lstm(x_hc)
+        out_hc, (hs, cs) = self.lstm(x_hc)
 
         ### ---------------
         ### Forecast period
@@ -134,25 +119,29 @@ class MF2LSTM(nn.Module):
         group_masks = {}
 
         # Pre-extract sequences and masks for all groups
-        for g_name, vars_list in dynamic_inputs.items():
-            g_vars = torch.stack([sample["x_d_fc"][var] for var in vars_list], dim=-1)
+        for g_name in dynamic_inputs:
+            g_vars = sample["x_d_fc"][g_name] if isinstance(sample["x_d_fc"], dict) else sample["x_d_fc"]
 
-            # Group masks to be consistent with hindcast period
-            if self.emb_fc.cfg.nan_probabilistic_masking:
-                g_mask = self.emb_hc.group_mask[g_name].unsqueeze(1).unsqueeze(2)
-            else:
-                g_mask = g_vars.new_zeros(g_vars.shape[0], 1, 1, dtype=torch.bool)
-
-            group_masks[g_name] = g_mask
-
-            if g_name == "ar":
-                ar_t = g_vars[:, :1, :]  # Past discharges used as input in first forecast time
+            # Groups and masks
+            if g_name == self.emb_fc.cfg.ar_group_name:
+                ar_t = g_vars[:, :1, :]
+                # Keep ar masked if it was dropped probabilistically, or if it is NaN
+                is_ar_absent = self._ar_masked(ar_t) | ar_t.isnan().all(dim=-1, keepdim=True)
+                group_masks[g_name] = is_ar_absent
             else:
                 x_fc_groups[g_name] = g_vars
+                if self.emb_fc.cfg.nan_probabilistic_masking:
+                    group_masks[g_name] = self.emb_hc.group_mask[g_name].unsqueeze(1).unsqueeze(2)
+                else:
+                    group_masks[g_name] = g_vars.new_zeros(g_vars.shape[0], 1, 1, dtype=torch.bool)
 
-        # Forecast counter
-        if self.forecast_counter == 1:
-            fc_counter = self.fc_counter[self.emb_hc.input_seq_length :].view(1, -1, 1).expand(batch_size, -1, -1)
+        # Forecast frequency flags
+        batch_size = x_hc.shape[0]
+        fc_freq_flag = (
+            self.emb_fc.flag_info["flag"].unsqueeze(0).expand(batch_size, -1, -1)
+            if self.emb_fc.flag_info.get("flag") is not None
+            else x_hc.new_zeros(batch_size, self.emb_fc.input_seq_length, 0)
+        )
 
         # Preallocate prediction tensor
         pred = torch.empty((batch_size, self.emb_fc.input_seq_length, self.head.output_features), device=x_hc.device)
@@ -165,7 +154,7 @@ class MF2LSTM(nn.Module):
             x_d = []
 
             for group_name in dynamic_inputs:
-                if group_name == "ar":
+                if group_name == self.emb_fc.cfg.ar_group_name:
                     x_t = ar_t
                 else:
                     x_t = x_fc_groups[group_name][:, t : t + 1, :]
@@ -177,7 +166,6 @@ class MF2LSTM(nn.Module):
 
                 # Masked-mean embedding
                 x_t = torch.where(step_mask, 0.0, x_t)
-                # Using bracket notation for the ModuleDict key lookup
                 x_t_emb = self.emb_fc.emb_x_d["x_d_fc"][group_name](x_t)
                 x_t_emb = torch.where(step_mask, torch.nan, x_t_emb)
                 x_d.append(x_t_emb)
@@ -186,12 +174,10 @@ class MF2LSTM(nn.Module):
             x_d_fc = torch.where(torch.isnan(x_d_fc), 0.0, x_d_fc)
 
             # Concatenate remaining information
-            flag_t = self.emb_fc.flag_info["flag"][t : t + 1, :].unsqueeze(0).expand(batch_size, -1, -1)
+            flag_t = fc_freq_flag[:, t : t + 1, :]
             x_s_t = hc_info["x_s"][:, :1, :]
             x_d_fc = torch.cat([x_d_fc, flag_t, x_s_t], dim=2)
-
-            if self.forecast_counter == 1:
-                x_d_fc = torch.cat([x_d_fc, fc_counter[:, t : t + 1, :]], dim=2)
+            x_d_fc = self.fc_counter(x_d_fc, step=t)
 
             # Forward pass of forecast
             out_fc, (hs, cs) = self.lstm(x_d_fc, (hs, cs))
@@ -211,6 +197,7 @@ class MF2LSTM(nn.Module):
             ar_t = torch.cat([Q_t, ar_t[:, :, :-1]], dim=2)
 
         model_out["y_hat"] = pred[:, -self.predict_last_n :, :]
+
         if self.head_type == "mdn":
             model_out["weights"] = torch.cat(preds_weights, dim=1)[:, -self.predict_last_n :, :, :]
             model_out["params"] = {
@@ -218,3 +205,9 @@ class MF2LSTM(nn.Module):
             }
 
         return model_out
+
+    def _ar_masked(self, ref: torch.Tensor) -> torch.Tensor:
+        """Check if the autoregressive discharge group is dropped or masked."""
+        if self.emb_hc.cfg.nan_probabilistic_masking:
+            return self.emb_hc.group_mask[self.emb_fc.cfg.ar_group_name].reshape(-1, 1, 1)
+        return torch.zeros_like(ref, dtype=torch.bool)

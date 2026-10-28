@@ -226,12 +226,12 @@ Model configuration
 --------------------------------------------------
 
 - ``model`` (str):
-    Name of the model to use. Currently implemented: "cudalstm", "lstmmdn".
+    Name of the model to use. Currently implemented: "cudalstm", "mf2lstm", "hybrid".
 
 - ``hidden_size`` (int):
     Number of hidden units in the LSTM cell
 
-- ``initial_forget_gate`` (float):
+- ``initial_forget_bias`` (float):
     Initial value of the forget gate bias.
 
 .. _emb_reference:
@@ -260,6 +260,9 @@ Embedding networks
 
 - ``static_embedding`` (dict[str, str | float | list[int]]): 
     Configuration for static embedding layers (embedding for static attributes). It has the same structure as ``dynamic_embedding``.
+
+- ``shared_dynamic_embedding`` (bool):
+    Boolean specifying whether to share embedding network weights across input layers (e.g., between hindcast and forecast periods) for groups with identical feature dimensions. Default is False.
 
 .. _nan_reference:
 
@@ -327,8 +330,15 @@ Forecast model
     in forecast period) want to be used instead of real forecast, the ``pseudo_forecast_input`` argument should be used. Currently forecast input is only supported for single frequency, and 
     the dictionary case is used if multiple groups of variables are present. See first and third case from the example of ``dynamic_input``.
 
-- ``forecast_counter`` (bool):
-    Boolean to specify if a forecast counter (e.g., a lead time indicator) should be used as input.
+- ``forecast_counter`` (bool | str):
+    Forecast step counter / lead-time positional encoding added to the inputs. Supported options are:
+
+    - ``"linear"`` (or ``True``): Linear lead-time counter (0.0 during hindcast, and 1, 2, ..., n_fc during forecast).
+    - ``"exponential"``: Exponential decay counter (1.0 during hindcast, and :math:`\exp(-t / \tau)` during forecast).
+    - ``None`` (or ``False``): No counter added. Default is None.
+
+- ``forecast_counter_tau`` (float):
+    Characteristic decay timescale :math:`\tau` (in timesteps) used when ``forecast_counter`` is set to ``"exponential"``. Default is 24.
 
 - ``forecast_dataset_in_ram`` (bool):
     Boolean to specify if the forecast dataset should be loaded in RAM. Default is True.
@@ -367,9 +377,15 @@ Multi-frequency masked-forecasting LSTM (MF2LSTM)
     This significantly speeds up training by allowing the combined sequence (hindcast and forecast) to be routed directly
     into PyTorch's CUDA-optimized LSTM module. Default is True.
 
-- ``pseudo_forecast_ar_input`` (list[str]):
-    Autoregressive input variables used during the forecast period. This must be defined even when running a real-forecast setup,
-    as the first timestep of the forecast horizon ingests the last available autoregressive input from the end of the hindcast period.
+- ``pseudo_forecast_ar_input`` (dict[str, list[str]]):
+    Autoregressive input variable(s) used during the forecast period, specified as a single-key dictionary where the key matches an autoregressive group defined in ``dynamic_input``. This must be defined even when running a real-forecast setup, as the first timestep of the forecast horizon ingests the last available autoregressive input from the end of the hindcast period.
+
+    .. code-block:: python
+
+        # Example pseudo_forecast_ar_input
+        pseudo_forecast_ar_input = {
+            "ar": ["discharge_spec_obs_shift1"]
+        }
 
 .. _mdn_reference:
 
